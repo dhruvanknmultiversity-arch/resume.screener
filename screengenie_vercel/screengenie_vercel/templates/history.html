@@ -38,8 +38,9 @@
         <td><div class="score-orb {{ 'high' if s['avg_score']>=70 else ('mid' if s['avg_score']>=45 else 'low') }}">{{ s['avg_score']|round(0)|int }}</div></td>
         <td class="row-actions">
           <a class="ghost-btn" href="{{ url_for('results', scan_id=s['id']) }}">Open →</a>
-          <button class="ghost-btn danger" type="button"
-            onclick="openDeleteModal('{{ url_for('delete_scan', scan_id=s['id']) }}', '{{ s['jd_filename']|replace("'", "\\'") }}')">Delete</button>
+          <form action="{{ url_for('delete_scan', scan_id=s['id']) }}" method="post" style="display:inline">
+            <button class="ghost-btn danger" type="submit" onclick="return confirm('Delete this scan?')">Delete</button>
+          </form>
         </td>
       </tr>
       {% endfor %}
@@ -54,21 +55,6 @@
   <a class="primary-btn" href="{{ url_for('index') }}">⚡ Start a Bulk Scan</a>
 </div>
 {% endif %}
-
-{# ── Delete confirmation modal ── #}
-<div class="modal-overlay hidden" id="delete-modal">
-  <div class="modal" style="max-width:420px; text-align:center;">
-    <div style="font-size:40px; margin-bottom:12px;">🗑️</div>
-    <h3 style="margin-bottom:8px; font-size:18px;">Delete this scan?</h3>
-    <p class="muted" id="delete-modal-desc" style="margin-bottom:20px; font-size:13px;"></p>
-    <div style="display:flex; gap:10px; justify-content:center;">
-      <button type="button" class="ghost-btn" id="delete-cancel">Cancel</button>
-      <form id="delete-form" method="post" style="display:inline">
-        <button type="submit" class="primary-btn" style="background:#d92d20;">Yes, delete</button>
-      </form>
-    </div>
-  </div>
-</div>
 
 {% if scans %}
 <script>
@@ -87,19 +73,6 @@ function filterHistory(){
 }
 hs.addEventListener('input', filterHistory);
 filterHistory();
-
-function openDeleteModal(action, filename) {
-  document.getElementById('delete-form').action = action;
-  document.getElementById('delete-modal-desc').textContent = '"' + filename + '" and all its candidates will be permanently removed.';
-  document.getElementById('delete-modal').classList.remove('hidden');
-}
-document.getElementById('delete-cancel').addEventListener('click', () => {
-  document.getElementById('delete-modal').classList.add('hidden');
-});
-document.getElementById('delete-modal').addEventListener('click', e => {
-  if (e.target === document.getElementById('delete-modal'))
-    document.getElementById('delete-modal').classList.add('hidden');
-});
 </script>
 {% endif %}
 {% endblock %}
