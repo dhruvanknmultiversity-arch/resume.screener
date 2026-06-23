@@ -1,0 +1,194 @@
+{% extends 'base.html' %}
+{% set active = 'bulk' %}
+{% block title %}Bulk Screener{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <div class="eyebrow">P&amp;C Toolkit</div>
+    <h1>Bulk Resume Screener</h1>
+    <p class="lede">Upload one job description and any number of resumes (PDF, DOCX, TXT, or a ZIP).
+      Screen Genie parses every file, extracts contact details, and ranks every candidate by
+      semantic match + keyword coverage against the JD — works for any domain.</p>
+  </div>
+  <div class="head-stats">
+    <div class="stat-mini"><span>JD</span> any format</div>
+    <div class="stat-mini"><span>Batch</span> up to 200</div>
+    <div class="stat-mini"><span>Engine</span> Claude AI</div>
+  </div>
+</div>
+
+<form class="screen-form" id="screen-form" action="{{ url_for('scan') }}" method="post" enctype="multipart/form-data">
+  <div class="grid-2">
+    <div class="card upload">
+      <div class="card-head">
+        <div class="card-title">① Job Description</div>
+        <div class="card-sub">PDF · DOCX · TXT</div>
+      </div>
+      <label class="drop" id="jd-drop">
+        <input type="file" name="jd_file" id="jd-file" accept=".pdf,.docx,.txt" required>
+        <div class="drop-ico">📄</div>
+        <div class="drop-title">Drop the JD here</div>
+        <div class="drop-sub">or click to browse</div>
+        <div class="drop-chip" id="jd-chip"></div>
+      </label>
+    </div>
+
+    <div class="card upload">
+      <div class="card-head">
+        <div class="card-title">② Candidate Resumes</div>
+        <div class="seg">
+          <button type="button" class="seg-btn active" data-mode="files">Files</button>
+          <button type="button" class="seg-btn" data-mode="zip">ZIP</button>
+        </div>
+      </div>
+
+      <input type="hidden" name="resume_mode" id="resume_mode" value="files">
+
+      <label class="drop" id="files-drop">
+        <input type="file" name="resume_files" id="resume-files" accept=".pdf,.docx,.txt" multiple>
+        <div class="drop-ico">📎</div>
+        <div class="drop-title">Drop multiple resumes</div>
+        <div class="drop-sub">PDF / DOCX / TXT · up to 200</div>
+        <div class="drop-list" id="files-list"></div>
+      </label>
+
+      <label class="drop hidden" id="zip-drop">
+        <input type="file" name="resume_zip" id="resume-zip" accept=".zip">
+        <div class="drop-ico">🗂️</div>
+        <div class="drop-title">Drop a ZIP of resumes</div>
+        <div class="drop-sub">Folder of PDF / DOCX / TXT files</div>
+        <div class="drop-chip" id="zip-chip"></div>
+      </label>
+    </div>
+  </div>
+
+  <div class="form-msg hidden" id="form-msg"></div>
+  <button type="submit" class="primary-btn" id="run-btn">⚡ Screen Resumes</button>
+</form>
+
+<div class="info-row">
+  <div class="info-card">
+    <div class="info-ico g1">🎯</div>
+    <div><strong>Domain-agnostic scoring</strong><p>Keywords are auto-extracted from your JD — no manual tagging.</p></div>
+  </div>
+  <div class="info-card">
+    <div class="info-ico g2">🧑‍💼</div>
+    <div><strong>Auto-extracted profile</strong><p>Name, email and phone parsed from each resume.</p></div>
+  </div>
+  <div class="info-card">
+    <div class="info-ico g3">📈</div>
+    <div><strong>Recruiter-ready board</strong><p>Ranked list with grade, status, matched / missing keywords.</p></div>
+  </div>
+</div>
+
+<script>
+const segBtns = document.querySelectorAll('.seg-btn');
+const filesDrop = document.getElementById('files-drop');
+const zipDrop = document.getElementById('zip-drop');
+const modeInput = document.getElementById('resume_mode');
+const filesInput = document.getElementById('resume-files');
+const zipInput = document.getElementById('resume-zip');
+
+segBtns.forEach(b => b.addEventListener('click', () => {
+  segBtns.forEach(x => x.classList.remove('active'));
+  b.classList.add('active');
+  const mode = b.dataset.mode;
+  modeInput.value = mode;
+  if (mode === 'files') {
+    filesDrop.classList.remove('hidden'); zipDrop.classList.add('hidden');
+    zipInput.value = '';
+  } else {
+    zipDrop.classList.remove('hidden'); filesDrop.classList.add('hidden');
+    filesInput.value = '';
+  }
+}));
+
+document.getElementById('jd-file').addEventListener('change', e => {
+  const f = e.target.files[0];
+  document.getElementById('jd-chip').textContent = f ? '📄 ' + f.name : '';
+});
+filesInput.addEventListener('change', e => {
+  const list = document.getElementById('files-list');
+  list.innerHTML = '';
+  Array.from(e.target.files).slice(0, 50).forEach(f => {
+    const d = document.createElement('div'); d.className='file-pill'; d.textContent = f.name;
+    list.appendChild(d);
+  });
+  if (e.target.files.length > 50) {
+    const d = document.createElement('div'); d.className='file-pill more';
+    d.textContent = '+' + (e.target.files.length - 50) + ' more';
+    list.appendChild(d);
+  }
+});
+zipInput.addEventListener('change', e => {
+  const f = e.target.files[0];
+  document.getElementById('zip-chip').textContent = f ? '🗂️ ' + f.name : '';
+});
+
+// Client-side validation before submit — avoids a server round-trip on obvious mistakes
+document.getElementById('screen-form').addEventListener('submit', e => {
+  const msg = document.getElementById('form-msg');
+  const jd = document.getElementById('jd-file').files.length;
+  const mode = modeInput.value;
+  const resumeCount = mode === 'zip' ? zipInput.files.length : filesInput.files.length;
+
+  let err = '';
+  if (!jd) err = 'Please upload a job description file.';
+  else if (!resumeCount) err = mode === 'zip'
+      ? 'Please add a ZIP of resumes.'
+      : 'Please add at least one resume file.';
+
+  if (err) {
+    e.preventDefault();
+    msg.textContent = '⚠ ' + err;
+    msg.classList.remove('hidden');
+    return;
+  }
+  // valid → show full-page loading overlay while server processes
+  document.getElementById('loading-overlay').classList.remove('hidden');
+  document.getElementById('run-btn').disabled = true;
+});
+</script>
+
+{# Full-page loading overlay — shown while /scan processes synchronously #}
+<div class="loading-overlay hidden" id="loading-overlay">
+  <div class="loading-box">
+    <div class="loading-spinner"></div>
+    <h2>Screening Resumes…</h2>
+    <p class="lede" id="loading-msg">Claude AI is reading every resume and scoring it against your JD.</p>
+    <div class="loading-bar-wrap"><div class="loading-bar-fill" id="loading-bar"></div></div>
+    <p class="muted" style="font-size:.8rem;margin-top:16px">Please keep this tab open. You'll be taken to results automatically.</p>
+  </div>
+</div>
+
+<style>
+.loading-overlay {
+  position: fixed; inset: 0; background: rgba(15,17,23,.97);
+  z-index: 9999; display: flex; align-items: center; justify-content: center;
+}
+.loading-overlay.hidden { display: none; }
+.loading-box {
+  text-align: center; max-width: 480px; padding: 48px 40px;
+  background: #1a1d2e; border-radius: 20px; border: 1px solid #2d2f45;
+}
+.loading-spinner {
+  width: 56px; height: 56px; border: 4px solid #2d2f45;
+  border-top-color: #6C63FF; border-radius: 50%;
+  animation: spin 1s linear infinite; margin: 0 auto 24px;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+.loading-bar-wrap {
+  background: #2d2f45; border-radius: 8px; height: 8px;
+  overflow: hidden; margin-top: 20px;
+}
+.loading-bar-fill {
+  height: 8px; background: #6C63FF; border-radius: 8px;
+  animation: indeterminate 1.8s ease-in-out infinite;
+}
+@keyframes indeterminate {
+  0%   { width: 0%;   margin-left: 0%; }
+  50%  { width: 60%;  margin-left: 20%; }
+  100% { width: 0%;   margin-left: 100%; }
+}
+</style>
+{% endblock %}

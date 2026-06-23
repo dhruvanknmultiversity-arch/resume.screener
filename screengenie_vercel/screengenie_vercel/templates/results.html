@@ -1,0 +1,224 @@
+{% extends 'base.html' %}
+{% set active = 'bulk' %}
+{% set show_back = true %}
+{% block title %}Results{% endblock %}
+{% block content %}
+<div class="crumbs"><a href="{{ url_for('index') }}">Bulk Screener</a> · Results</div>
+<div class="page-head">
+  <div>
+    <h1>Ranked Candidates</h1>
+    <p class="lede"><strong>JD:</strong> {{ scan['jd_filename'] }} · <strong>Detected role:</strong> {{ scan['jd_role'] }}</p>
+    <div class="scan-meta">
+      {% if scan['engine'] %}<span class="engine-badge {{ 'ai' if scan['engine']=='Claude AI' else 'rule' }}">
+        {{ '🤖 Powered by Claude AI' if scan['engine']=='Claude AI' else '⚙ Rule-based engine' }}</span>{% endif %}
+      <span class="muted">Scanned {{ scan['created_at'][:10] }} at {{ scan['created_at'][11:16] }}</span>
+      {% if scan['duration_seconds'] %}<span class="muted">· took
+        {% set d = scan['duration_seconds']|int %}
+        {% if d >= 60 %}{{ d // 60 }}m {{ d % 60 }}s{% else %}{{ d }}s{% endif %}</span>{% endif %}
+    </div>
+  </div>
+  <div class="head-stats">
+    <div class="stat-mini"><span>Candidates</span> {{ scan['resume_count'] }}</div>
+    <div class="stat-mini"><span>Avg score</span> {{ scan['avg_score'] }}%</div>
+  </div>
+</div>
+
+<div class="card kw-card">
+  <div class="card-title small">Auto-extracted JD keywords</div>
+  <div class="kw-row">
+    {% for kw in keywords %}<span class="kw">{{ kw }}</span>{% endfor %}
+  </div>
+</div>
+
+{# ── Toolbar: search, filters, export, bulk actions ── #}
+<div class="toolbar">
+  <input type="text" id="search" class="toolbar-search" placeholder="🔍 Search candidate name…">
+  <select id="filter-status" class="toolbar-select">
+    <option value="">All statuses</option>
+    <option value="Shortlist">Shortlist</option>
+    <option value="Review">Review</option>
+    <option value="Reject">Reject</option>
+  </select>
+  <select id="filter-grade" class="toolbar-select">
+    <option value="">All grades</option>
+    <option value="A">Grade A</option>
+    <option value="B">Grade B</option>
+    <option value="C">Grade C</option>
+    <option value="D">Grade D</option>
+    <option value="F">Grade F</option>
+  </select>
+  <span class="toolbar-count" id="visible-count"></span>
+  <div class="toolbar-spacer"></div>
+  <button type="button" class="ghost-btn" id="copy-emails">📧 Copy selected emails</button>
+  <button type="button" class="ghost-btn" id="draft-email">✉ Draft invite</button>
+  <a class="ghost-btn" href="{{ url_for('export_results_csv', scan_id=scan['id']) }}">⬇ Export CSV</a>
+</div>
+
+<div class="card table-card">
+  <table class="rank-table" id="rank-table">
+    <thead>
+      <tr>
+        <th><input type="checkbox" id="select-all" title="Select all"></th>
+        <th>#</th>
+        <th>Score</th>
+        <th>Candidate</th>
+        <th>Contact</th>
+        <th>Grade</th>
+        <th>Skills</th>
+        <th>Status</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for c in candidates %}
+      <tr class="cand-row" data-name="{{ c['name']|lower }}" data-status="{{ c['status'] }}" data-grade="{{ c['grade'] }}">
+        <td><input type="checkbox" class="row-check" data-email="{{ c['email'] }}" data-name="{{ c['name'] }}"></td>
+        <td class="rk">#{{ loop.index }}</td>
+        <td><div class="score-orb {{ 'high' if c['score']>=70 else ('mid' if c['score']>=45 else 'low') }}">{{ c['score'] }}</div></td>
+        <td>
+          <div class="cand-name">{{ c['name'] }}</div>
+          <div class="cand-file">{{ c['filename'] }}</div>
+        </td>
+        <td>
+          <div class="meta copyable" title="Click to copy" data-copy="{{ c['email'] }}">{{ c['email'] }}</div>
+          <div class="meta copyable" title="Click to copy" data-copy="{{ c['phone'] }}">{{ c['phone'] }}</div>
+        </td>
+        <td><span class="grade g-{{ c['grade'] }}">{{ c['grade'] }}</span></td>
+        <td>
+          <div class="kw-line"><span class="kw-num">{{ c['matched_skills']|length }}</span>/{{ c['matched_skills']|length + c['missing_skills']|length }} skills matched</div>
+          <div class="kw-mini">{{ c['matched_skills'][:5]|join(', ') }}{% if c['matched_skills']|length > 5 %}…{% endif %}</div>
+        </td>
+        <td><span class="pill p-{{ c['status']|lower }}">{{ c['status'] }}</span></td>
+        <td class="row-actions">
+          <a class="ghost-btn" href="{{ url_for('candidate_detail', candidate_id=c['id']) }}">View →</a>
+          <a class="ghost-btn" href="{{ url_for('candidate_download_file', candidate_id=c['id']) }}">⬇</a>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <div class="empty-filter hidden" id="empty-filter">No candidates match these filters.</div>
+</div>
+
+<div class="actions-row">
+  <a class="primary-btn" href="{{ url_for('index') }}">⚡ New Scan</a>
+  <a class="ghost-btn big" href="{{ url_for('history') }}">View Scan History</a>
+</div>
+
+{# ── Email draft modal ── #}
+<div class="modal-overlay hidden" id="email-modal">
+  <div class="modal">
+    <div class="modal-head">
+      <strong>Interview invite draft</strong>
+      <button type="button" class="modal-close" id="modal-close">✕</button>
+    </div>
+    <p class="muted" style="margin:0 0 10px;">Based on your selected candidates. Edit and copy into your email tool.</p>
+    <textarea id="email-text" class="email-textarea" rows="12"></textarea>
+    <div style="display:flex; gap:8px; margin-top:12px;">
+      <button type="button" class="primary-btn" id="copy-draft">Copy draft</button>
+      <button type="button" class="ghost-btn" id="modal-cancel">Close</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast hidden" id="toast"></div>
+
+<script>
+const rows = Array.from(document.querySelectorAll('.cand-row'));
+const search = document.getElementById('search');
+const fStatus = document.getElementById('filter-status');
+const fGrade = document.getElementById('filter-grade');
+const visibleCount = document.getElementById('visible-count');
+const emptyFilter = document.getElementById('empty-filter');
+
+function applyFilters() {
+  const q = search.value.trim().toLowerCase();
+  const st = fStatus.value, gr = fGrade.value;
+  let shown = 0;
+  rows.forEach(r => {
+    const ok = (!q || r.dataset.name.includes(q))
+      && (!st || r.dataset.status === st)
+      && (!gr || r.dataset.grade === gr);
+    r.style.display = ok ? '' : 'none';
+    if (ok) shown++;
+  });
+  visibleCount.textContent = shown + ' of ' + rows.length + ' shown';
+  emptyFilter.classList.toggle('hidden', shown !== 0);
+}
+[search, fStatus, fGrade].forEach(el => el.addEventListener('input', applyFilters));
+applyFilters();
+
+// Toast helper
+let toastTimer;
+function toast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg;
+  t.classList.remove('hidden');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => t.classList.add('hidden'), 1800);
+}
+
+// Click-to-copy email / phone
+document.querySelectorAll('.copyable').forEach(el => {
+  el.addEventListener('click', () => {
+    const v = el.dataset.copy;
+    if (v && v !== 'Not found') {
+      navigator.clipboard.writeText(v);
+      toast('Copied: ' + v);
+    }
+  });
+});
+
+// Select-all (only affects visible rows)
+document.getElementById('select-all').addEventListener('change', e => {
+  rows.forEach(r => {
+    if (r.style.display !== 'none') r.querySelector('.row-check').checked = e.target.checked;
+  });
+});
+
+function selectedCandidates() {
+  return Array.from(document.querySelectorAll('.row-check'))
+    .filter(c => c.checked)
+    .map(c => ({ email: c.dataset.email, name: c.dataset.name }))
+    .filter(c => c.email && c.email !== 'Not found');
+}
+
+// Copy selected emails
+document.getElementById('copy-emails').addEventListener('click', () => {
+  const sel = selectedCandidates();
+  if (!sel.length) { toast('No candidates selected (or no emails found).'); return; }
+  navigator.clipboard.writeText(sel.map(s => s.email).join(', '));
+  toast(`Copied ${sel.length} email${sel.length>1?'s':''}.`);
+});
+
+// Email draft modal
+const modal = document.getElementById('email-modal');
+document.getElementById('draft-email').addEventListener('click', () => {
+  const sel = selectedCandidates();
+  if (!sel.length) { toast('Select candidates first.'); return; }
+  const names = sel.map(s => s.name).join(', ');
+  document.getElementById('email-text').value =
+`Subject: Interview Invitation — {{ scan['jd_role'] }}
+
+Hi {NAME},
+
+Thank you for applying for the {{ scan['jd_role'] }} role. We were impressed with your profile and would like to invite you for an interview.
+
+Please share your availability for this week so we can schedule a convenient slot.
+
+Selected candidates (BCC): ${sel.map(s => s.email).join(', ')}
+
+Best regards,
+P&C Team`;
+  modal.classList.remove('hidden');
+});
+function closeModal() { modal.classList.add('hidden'); }
+document.getElementById('modal-close').addEventListener('click', closeModal);
+document.getElementById('modal-cancel').addEventListener('click', closeModal);
+modal.addEventListener('click', e => { if (e.target === modal) closeModal(); });
+document.getElementById('copy-draft').addEventListener('click', () => {
+  navigator.clipboard.writeText(document.getElementById('email-text').value);
+  toast('Draft copied to clipboard.');
+});
+</script>
+{% endblock %}

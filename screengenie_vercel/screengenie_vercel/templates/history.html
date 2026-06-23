@@ -1,0 +1,78 @@
+{% extends 'base.html' %}
+{% set active = 'history' %}
+{% set show_back = true %}
+{% block title %}Scan History{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Activity</div>
+    <h1>Scan History</h1>
+    <p class="lede">Every bulk screening run is saved here. Open one to see its ranked candidate board.</p>
+  </div>
+</div>
+
+{% if scans %}
+<div class="toolbar">
+  <input type="text" id="history-search" class="toolbar-search" placeholder="🔍 Search by JD file or role…">
+  <span class="toolbar-count" id="history-count"></span>
+</div>
+<div class="card table-card">
+  <table class="rank-table" id="history-table">
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>Job Description</th>
+        <th>Detected Role</th>
+        <th>Resumes</th>
+        <th>Avg Score</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for s in scans %}
+      <tr class="hist-row" data-search="{{ (s['jd_filename'] ~ ' ' ~ (s['jd_role'] or ''))|lower }}">
+        <td>{{ s['created_at'][:10] }} <span class="muted">{{ s['created_at'][11:16] }}</span></td>
+        <td><strong>{{ s['jd_filename'] }}</strong></td>
+        <td class="muted">{{ s['jd_role'] }}</td>
+        <td>{{ s['resume_count'] }}</td>
+        <td><div class="score-orb {{ 'high' if s['avg_score']>=70 else ('mid' if s['avg_score']>=45 else 'low') }}">{{ s['avg_score']|round(0)|int }}</div></td>
+        <td class="row-actions">
+          <a class="ghost-btn" href="{{ url_for('results', scan_id=s['id']) }}">Open →</a>
+          <form action="{{ url_for('delete_scan', scan_id=s['id']) }}" method="post" style="display:inline">
+            <button class="ghost-btn danger" type="submit" onclick="return confirm('Delete this scan?')">Delete</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty card">
+  <div class="empty-ico">🕘</div>
+  <h3>No scans yet</h3>
+  <p>Run your first bulk screening to populate the history.</p>
+  <a class="primary-btn" href="{{ url_for('index') }}">⚡ Start a Bulk Scan</a>
+</div>
+{% endif %}
+
+{% if scans %}
+<script>
+const hrows = Array.from(document.querySelectorAll('.hist-row'));
+const hs = document.getElementById('history-search');
+const hc = document.getElementById('history-count');
+function filterHistory(){
+  const q = hs.value.trim().toLowerCase();
+  let shown = 0;
+  hrows.forEach(r => {
+    const ok = !q || r.dataset.search.includes(q);
+    r.style.display = ok ? '' : 'none';
+    if (ok) shown++;
+  });
+  hc.textContent = shown + ' of ' + hrows.length + ' scans';
+}
+hs.addEventListener('input', filterHistory);
+filterHistory();
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Screen Genie — {% block title %}P&C Resume Screener{% endblock %}</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+<div class="layout">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">SG</div>
+      <div class="brand-text">
+        <div class="brand-name">Screen Genie</div>
+        <div class="brand-sub">P&amp;C Internal</div>
+      </div>
+    </div>
+
+    <nav class="nav">
+      <a class="nav-item {% if active=='bulk' %}active{% endif %}" href="{{ url_for('index') }}">
+        <span class="ico">⚡</span> Bulk Screener
+      </a>
+      <a class="nav-item {% if active=='history' %}active{% endif %}" href="{{ url_for('history') }}">
+        <span class="ico">🕘</span> Scan History
+      </a>
+      <a class="nav-item {% if active=='dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">
+        <span class="ico">📊</span> Dashboard
+      </a>
+    </nav>
+
+    <div class="side-foot">
+      <div class="env-badge">internal · v1.0</div>
+    </div>
+  </aside>
+
+  <main class="main">
+    {% if show_back %}
+    <div class="topbar">
+      <button class="back-btn" type="button" onclick="if(history.length>1){history.back()}else{window.location='{{ url_for('index') }}'}">← Back</button>
+    </div>
+    {% endif %}
+    {% with messages = get_flashed_messages() %}
+      {% if messages %}
+        <div class="flash">
+          {% for msg in messages %}<div>{{ msg }}</div>{% endfor %}
+        </div>
+      {% endif %}
+    {% endwith %}
+    {% block content %}{% endblock %}
+  </main>
+</div>
+</body>
+</html>

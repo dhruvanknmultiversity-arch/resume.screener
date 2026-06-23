@@ -1,0 +1,102 @@
+{% extends 'base.html' %}
+{% set active = 'bulk' %}
+{% block title %}Screening…{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <div class="eyebrow">In Progress</div>
+    <h1>Screening Resumes</h1>
+    <p class="lede">Claude AI is reading every resume and scoring it against your job description.
+      You can keep this tab open — you'll be taken to the results automatically.</p>
+  </div>
+</div>
+
+<div class="card scan-progress" id="scan-card">
+  <div class="scan-role">Role: <strong>{{ job['jd_role'] }}</strong></div>
+
+  <div class="scan-pct" id="scan-pct">0%</div>
+
+  <div class="scan-bar">
+    <div class="scan-fill" id="scan-fill" style="width:0%"></div>
+  </div>
+
+  <div class="scan-stats">
+    <div class="scan-stat">
+      <div class="scan-stat-val" id="stat-done">0</div>
+      <div class="scan-stat-lbl">Screened</div>
+    </div>
+    <div class="scan-stat">
+      <div class="scan-stat-val" id="stat-remaining">{{ job['total'] }}</div>
+      <div class="scan-stat-lbl">Remaining</div>
+    </div>
+    <div class="scan-stat">
+      <div class="scan-stat-val" id="stat-total">{{ job['total'] }}</div>
+      <div class="scan-stat-lbl">Total</div>
+    </div>
+    <div class="scan-stat">
+      <div class="scan-stat-val" id="stat-eta">—</div>
+      <div class="scan-stat-lbl">Time Left</div>
+    </div>
+  </div>
+
+  <div class="scan-foot">
+    <div class="spinner" id="spinner"></div>
+    <span id="scan-msg">Starting up…</span>
+  </div>
+</div>
+
+<div class="card scan-error hidden" id="error-card">
+  <h3>⚠ Something went wrong</h3>
+  <p id="error-msg" class="muted"></p>
+  <a class="primary-btn" href="{{ url_for('index') }}">← Back to Upload</a>
+</div>
+
+<script>
+const jobId = "{{ job_id }}";
+const total = {{ job['total'] }};
+
+function fmtEta(s) {
+  if (s === null || s === undefined) return "—";
+  if (s < 60) return s + "s";
+  const m = Math.floor(s / 60), sec = s % 60;
+  return m + "m " + (sec < 10 ? "0" : "") + sec + "s";
+}
+
+async function poll() {
+  try {
+    const res = await fetch(`/scan_progress/${jobId}`);
+    if (res.status === 404) { showError("This scan job has expired."); return; }
+    const d = await res.json();
+
+    if (d.status === "error") { showError(d.error || "Unknown error."); return; }
+
+    const pct = d.percent || 0;
+    document.getElementById('scan-pct').textContent = pct + '%';
+    document.getElementById('scan-fill').style.width = pct + '%';
+    document.getElementById('stat-done').textContent = d.done;
+    document.getElementById('stat-remaining').textContent = Math.max(0, total - d.done);
+    document.getElementById('stat-eta').textContent = fmtEta(d.eta);
+    document.getElementById('scan-msg').textContent =
+      d.status === "done" ? "Done — loading results…"
+                          : `Screened ${d.done} of ${total} resumes…`;
+
+    if (d.status === "done" && d.scan_id) {
+      window.location = `/results/${d.scan_id}`;
+      return;
+    }
+    setTimeout(poll, 1000);
+  } catch (e) {
+    setTimeout(poll, 2000);  // transient error — keep trying
+  }
+}
+
+function showError(msg) {
+  document.getElementById('scan-card').classList.add('hidden');
+  const ec = document.getElementById('error-card');
+  ec.classList.remove('hidden');
+  document.getElementById('error-msg').textContent = msg;
+}
+
+poll();
+</script>
+{% endblock %}

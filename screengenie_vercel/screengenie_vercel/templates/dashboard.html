@@ -1,0 +1,77 @@
+{% extends 'base.html' %}
+{% set active = 'dashboard' %}
+{% block title %}Dashboard{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Overview</div>
+    <h1>Recruiter Dashboard</h1>
+    <p class="lede">Aggregate hiring funnel across every bulk scan you've run.</p>
+  </div>
+</div>
+
+<div class="kpi-grid">
+  <div class="kpi card"><div class="kpi-ico b1">📄</div><div><div class="kpi-label">Resumes Screened</div><div class="kpi-val">{{ total_resumes }}</div></div></div>
+  <div class="kpi card"><div class="kpi-ico b2">✅</div><div><div class="kpi-label">Shortlisted</div><div class="kpi-val">{{ shortlisted }}</div></div></div>
+  <div class="kpi card"><div class="kpi-ico b3">📊</div><div><div class="kpi-label">Average Score</div><div class="kpi-val">{{ avg_score }}%</div></div></div>
+  <div class="kpi card"><div class="kpi-ico b4">⚡</div><div><div class="kpi-label">Bulk Scans</div><div class="kpi-val">{{ total_scans }}</div></div></div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <div class="card-title">Score Distribution</div>
+    {% set maxv = [buckets['0-39'], buckets['40-59'], buckets['60-79'], buckets['80-100'], 1]|max %}
+    {% for label, color in [('0-39','low'),('40-59','mid'),('60-79','blue'),('80-100','high')] %}
+    <div class="bd-row">
+      <div class="bd-label">{{ label }}</div>
+      <div class="bd-bar"><div class="bd-fill {{ color }}" style="width:{{ (buckets[label]/maxv)*100 }}%"></div></div>
+      <div class="bd-val">{{ buckets[label] }}</div>
+    </div>
+    {% endfor %}
+  </div>
+
+  <div class="card">
+    <div class="card-title">Grade Mix</div>
+    {% set gmax = [grade_counts['A'],grade_counts['B'],grade_counts['C'],grade_counts['D'],1]|max %}
+    {% for g in ['A','B','C','D'] %}
+    <div class="bd-row">
+      <div class="bd-label">Grade {{ g }}</div>
+      <div class="bd-bar"><div class="bd-fill g-{{ g }}" style="width:{{ (grade_counts[g]/gmax)*100 }}%"></div></div>
+      <div class="bd-val">{{ grade_counts[g] }}</div>
+    </div>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <div class="card-title">Top Candidates</div>
+    {% if top_candidates %}
+    <div class="top-list">
+      {% for c in top_candidates %}
+      <a class="top-row" href="{{ url_for('candidate_detail', candidate_id=c['id']) }}">
+        <div class="top-rank">#{{ loop.index }}</div>
+        <div class="top-name"><strong>{{ c['name'] }}</strong><span class="muted">{{ c['filename'] }}</span></div>
+        <div class="score-orb sm {{ 'high' if c['score']>=70 else ('mid' if c['score']>=45 else 'low') }}">{{ c['score'] }}</div>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}<p class="muted">Run a scan to populate this list.</p>{% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card-title">Recent Scans</div>
+    {% if recent_scans %}
+    <div class="top-list">
+      {% for s in recent_scans %}
+      <a class="top-row" href="{{ url_for('results', scan_id=s['id']) }}">
+        <div class="top-rank rsq">JD</div>
+        <div class="top-name"><strong>{{ s['jd_role'] or s['jd_filename'] }}</strong><span class="muted">{{ s['resume_count'] }} resumes · {{ s['created_at'][:10] }}</span></div>
+        <div class="score-orb sm {{ 'high' if s['avg_score']>=70 else ('mid' if s['avg_score']>=45 else 'low') }}">{{ s['avg_score']|round(0)|int }}</div>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}<p class="muted">No scans yet.</p>{% endif %}
+  </div>
+</div>
+{% endblock %}
