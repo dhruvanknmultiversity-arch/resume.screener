@@ -1,0 +1,355 @@
+{% extends 'base.html' %}
+{% set active = 'jd-analysis' %}
+{% block title %}JD Analysis{% endblock %}
+{% block content %}
+
+{% if not analysis %}
+{# ── Upload form ── #}
+<div class="page-head">
+  <div>
+    <div class="eyebrow">AI-Powered</div>
+    <h1>JD Analysis</h1>
+    <p class="lede">Upload any Job Description and Claude AI will score its quality across 6 dimensions,
+      identify missing keywords, flag issues, and let you generate an improved version — downloadable as PDF &amp; JSON.</p>
+  </div>
+  <div class="head-stats">
+    <div class="stat-mini"><span>Input</span> PDF · DOCX · TXT</div>
+    <div class="stat-mini"><span>Dims</span> 6 scored</div>
+    <div class="stat-mini"><span>Engine</span> Claude AI</div>
+  </div>
+</div>
+
+<form class="screen-form" id="jda-form" action="{{ url_for('jd_analyze') }}" method="post" enctype="multipart/form-data">
+  <div class="grid-2" style="margin-bottom:22px;">
+    <div class="card upload">
+      <div class="card-head">
+        <div class="card-title">① Upload Job Description</div>
+        <div class="card-sub">PDF · DOCX · TXT</div>
+      </div>
+      <label class="drop" id="jd-drop">
+        <input type="file" name="jd_file" id="jd-file" accept=".pdf,.docx,.txt" required>
+        <div class="drop-ico">📋</div>
+        <div class="drop-title">Drop the JD here</div>
+        <div class="drop-sub">or click to browse</div>
+        <div class="drop-chip" id="jd-chip"></div>
+      </label>
+    </div>
+
+    <div class="card">
+      <div class="card-title">② Describe what you're hiring for <span style="font-weight:400;color:var(--muted);font-size:12px;">(optional but improves accuracy)</span></div>
+      <textarea name="description" id="jda-desc"
+        placeholder="e.g. We need a mid-level Python backend engineer with 2-4 years experience in Django and AWS, for a fintech startup. The role involves building REST APIs and data pipelines."
+        style="width:100%; height:160px; border:1px solid var(--border); border-radius:10px; padding:12px;
+               font-family:inherit; font-size:13px; line-height:1.6; resize:vertical;
+               background:var(--soft); color:var(--text);"
+      ></textarea>
+      <p class="muted" style="margin-top:8px; font-size:12px;">The more context you give, the more accurate the keyword gap and seniority analysis will be.</p>
+    </div>
+  </div>
+
+  <button type="submit" class="primary-btn" id="run-btn">🔬 Analyse JD</button>
+</form>
+
+<div class="info-row" style="margin-top:28px;">
+  <div class="info-card">
+    <div class="info-ico g1">📊</div>
+    <div><strong>6-dimension scoring</strong><p>Clarity, Completeness, Keywords, Role Definition, Attractiveness, Seniority Alignment.</p></div>
+  </div>
+  <div class="info-card">
+    <div class="info-ico g2">🔑</div>
+    <div><strong>Keyword gap detection</strong><p>Finds domain keywords that strong candidates search for but your JD is missing.</p></div>
+  </div>
+  <div class="info-card">
+    <div class="info-ico g3">✨</div>
+    <div><strong>One-click JD fix</strong><p>Claude rewrites your JD using only your existing content — no fabrication, just improvement.</p></div>
+  </div>
+</div>
+
+{% else %}
+{# ── Analysis results ── #}
+{% set s = analysis['scores'] %}
+{% set overall = analysis['overall_score'] %}
+
+<div class="crumbs"><a href="{{ url_for('jd_analysis') }}">JD Analysis</a> · Results</div>
+
+<div class="page-head">
+  <div>
+    <h1>JD Quality Report</h1>
+    <p class="lede"><strong>File:</strong> {{ analysis['jd_filename'] }} &nbsp;·&nbsp;
+      <strong>Detected role:</strong> {{ analysis['detected_role'] }} &nbsp;·&nbsp;
+      <strong>Level:</strong> {{ analysis['seniority_level'] }}</p>
+  </div>
+  <div class="head-stats">
+    <div class="stat-mini"><span>Overall score</span> {{ overall }}/100</div>
+    <div class="stat-mini"><span>Issues</span> {{ analysis['issues']|length }}</div>
+    <div class="stat-mini"><span>Suggestions</span> {{ analysis['suggestions']|length }}</div>
+  </div>
+</div>
+
+{# ── Big score + radar ── #}
+<div style="display:grid; grid-template-columns:200px 1fr; gap:22px; margin-bottom:22px; align-items:start;">
+
+  {# Overall score orb #}
+  <div class="card" style="text-align:center; padding:28px 16px;">
+    <div class="big-orb {{ 'high' if overall>=70 else ('mid' if overall>=45 else 'low') }}" style="margin:0 auto 14px;">
+      {{ overall }}<span>/ 100</span>
+    </div>
+    <div style="font-weight:700; font-size:14px; margin-bottom:4px;">
+      {% if overall >= 80 %}Excellent JD{% elif overall >= 65 %}Good JD{% elif overall >= 50 %}Average JD{% else %}Needs Work{% endif %}
+    </div>
+    <div class="muted" style="font-size:12px;">Overall quality score</div>
+  </div>
+
+  {# Radar chart #}
+  <div class="card" style="padding:22px;">
+    <div class="card-title" style="margin-bottom:16px;">Dimension Breakdown</div>
+    <div style="display:flex; gap:22px; align-items:center; flex-wrap:wrap;">
+      <canvas id="radar-chart" width="220" height="220" style="flex-shrink:0;"></canvas>
+      <div style="flex:1; min-width:220px; display:flex; flex-direction:column; gap:10px;">
+        {% set dim_labels = [
+          ('Clarity',            s['clarity'],            '#6366f1'),
+          ('Completeness',       s['completeness'],       '#06b6d4'),
+          ('Keyword Richness',   s['keyword_richness'],   '#10b981'),
+          ('Role Definition',    s['role_definition'],    '#f59e0b'),
+          ('Attractiveness',     s['attractiveness'],     '#ec4899'),
+          ('Seniority Align',    s['seniority_alignment'],'#8b5cf6'),
+        ] %}
+        {% for label, val, color in dim_labels %}
+        <div style="display:flex; align-items:center; gap:10px; font-size:13px;">
+          <span style="width:130px; color:var(--muted);">{{ label }}</span>
+          <div style="flex:1; background:var(--soft); border-radius:6px; height:8px; overflow:hidden;">
+            <div style="height:8px; border-radius:6px; background:{{ color }}; width:{{ val }}%; transition:width .6s ease;"></div>
+          </div>
+          <span style="width:32px; text-align:right; font-weight:700; color:{{ color }};">{{ val }}</span>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+  </div>
+</div>
+
+{# ── Issues / Strengths / Suggestions ── #}
+<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin-bottom:22px;">
+
+  <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:12px; padding:18px;">
+    <div style="font-weight:700; color:#dc2626; font-size:14px; margin-bottom:12px;">
+      ✗ {{ analysis['issues']|length }} Issues Found
+    </div>
+    <ul style="margin:0; padding-left:18px; font-size:13px; color:#991b1b; line-height:1.7;">
+      {% for item in analysis['issues'] %}
+      <li>{{ item }}</li>
+      {% else %}
+      <li style="list-style:none; color:var(--muted);">No critical issues.</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:12px; padding:18px;">
+    <div style="font-weight:700; color:#16a34a; font-size:14px; margin-bottom:12px;">
+      ✓ {{ analysis['strengths']|length }} Strengths
+    </div>
+    <ul style="margin:0; padding-left:18px; font-size:13px; color:#166534; line-height:1.7;">
+      {% for item in analysis['strengths'] %}
+      <li>{{ item }}</li>
+      {% else %}
+      <li style="list-style:none; color:var(--muted);">Analysis complete.</li>
+      {% endfor %}
+    </ul>
+  </div>
+
+  <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:12px; padding:18px;">
+    <div style="font-weight:700; color:#b45309; font-size:14px; margin-bottom:12px;">
+      💡 {{ analysis['suggestions']|length }} Suggestions
+    </div>
+    <ol style="margin:0; padding-left:18px; font-size:13px; color:#78350f; line-height:1.7;">
+      {% for item in analysis['suggestions'] %}
+      <li>{{ item }}</li>
+      {% else %}
+      <li style="list-style:none; color:var(--muted);">Nothing to improve.</li>
+      {% endfor %}
+    </ol>
+  </div>
+</div>
+
+{# ── Missing keywords ── #}
+{% if analysis['missing_keywords'] %}
+<div class="card kw-card" style="margin-bottom:22px;">
+  <div class="card-title small">Missing Keywords — add these to improve ATS ranking</div>
+  <div class="kw-row">
+    {% for kw in analysis['missing_keywords'] %}<span class="kw missing">{{ kw }}</span>{% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{# ── Missing sections ── #}
+{% if analysis['missing_sections'] %}
+<div class="card" style="margin-bottom:22px; padding:16px 22px;">
+  <div class="card-title small" style="margin-bottom:10px;">Missing Sections</div>
+  <div class="kw-row">
+    {% for sec in analysis['missing_sections'] %}<span class="kw" style="background:#fef2f2; border-color:#fecaca; color:#dc2626;">{{ sec }}</span>{% endfor %}
+  </div>
+</div>
+{% endif %}
+
+{# ── Fix JD CTA ── #}
+<div class="card" style="margin-bottom:22px; padding:28px; text-align:center; border:2px dashed #6366f1; background:#f5f3ff;">
+  <div style="font-size:32px; margin-bottom:10px;">✨</div>
+  <h3 style="font-size:18px; margin-bottom:8px;">Fix this JD with AI</h3>
+  <p class="lede" style="margin:0 auto 18px; max-width:560px;">
+    Claude will rewrite the JD using only your existing content — adding missing keywords, fixing issues,
+    and restructuring for maximum ATS compatibility. Download result as PDF or JSON.
+  </p>
+  {% if fix_id %}
+  <a class="primary-btn" href="{{ url_for('jd_fix_result', fix_id=fix_id) }}" style="display:inline-block; text-decoration:none;">
+    View Improved JD →
+  </a>
+  {% else %}
+  <form action="{{ url_for('jd_fix', analysis_id=analysis['id']) }}" method="post" id="fix-form">
+    <button type="submit" class="primary-btn" id="fix-btn" onclick="showFixOverlay()">
+      ✨ Generate Improved JD
+    </button>
+  </form>
+  {% endif %}
+</div>
+
+<div class="actions-row">
+  <a class="ghost-btn big" href="{{ url_for('jd_analysis') }}">⬅ Analyse Another JD</a>
+</div>
+{% endif %}
+
+{# ── Loading overlay ── #}
+<div class="loading-overlay hidden" id="loading-overlay">
+  <div class="loading-box">
+    <div class="loading-spinner"></div>
+    <h2 id="overlay-title">Analysing JD…</h2>
+    <p class="lede" id="overlay-msg">Claude AI is evaluating your Job Description across 6 quality dimensions.</p>
+    <div class="loading-bar-wrap"><div class="loading-bar-fill"></div></div>
+    <p class="muted" style="font-size:.8rem; margin-top:16px;">Keep this tab open — you'll be taken to results automatically.</p>
+  </div>
+</div>
+
+<style>
+.loading-overlay {
+  position:fixed; inset:0; background:rgba(15,17,23,.97);
+  z-index:9999; display:flex; align-items:center; justify-content:center;
+}
+.loading-overlay.hidden { display:none; }
+.loading-box {
+  text-align:center; max-width:480px; padding:48px 40px;
+  background:#1a1d2e; border-radius:20px; border:1px solid #2d2f45;
+}
+.loading-spinner {
+  width:56px; height:56px; border:4px solid #2d2f45;
+  border-top-color:#6366f1; border-radius:50%;
+  animation:spin 1s linear infinite; margin:0 auto 24px;
+}
+@keyframes spin { to { transform:rotate(360deg); } }
+.loading-bar-wrap { background:#2d2f45; border-radius:8px; height:8px; overflow:hidden; margin-top:20px; }
+.loading-bar-fill {
+  height:8px; background:#6366f1; border-radius:8px;
+  animation:indeterminate 1.8s ease-in-out infinite;
+}
+@keyframes indeterminate {
+  0%   { width:0%;  margin-left:0%; }
+  50%  { width:60%; margin-left:20%; }
+  100% { width:0%;  margin-left:100%; }
+}
+</style>
+
+<script>
+{% if not analysis %}
+document.getElementById('jd-file').addEventListener('change', e => {
+  const f = e.target.files[0];
+  document.getElementById('jd-chip').textContent = f ? '📋 ' + f.name : '';
+});
+document.getElementById('jda-form').addEventListener('submit', () => {
+  document.getElementById('loading-overlay').classList.remove('hidden');
+  document.getElementById('run-btn').disabled = true;
+});
+{% endif %}
+
+function showFixOverlay() {
+  const ov = document.getElementById('loading-overlay');
+  document.getElementById('overlay-title').textContent = 'Generating Improved JD…';
+  document.getElementById('overlay-msg').textContent = 'Claude AI is rewriting your JD — fixing issues and adding missing keywords.';
+  ov.classList.remove('hidden');
+}
+
+{% if analysis %}
+// Draw radar chart
+(function() {
+  const canvas = document.getElementById('radar-chart');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const cx = 110, cy = 110, r = 85;
+  const labels = ['Clarity','Completeness','Keywords','Role Def.','Attract.','Seniority'];
+  const values = [
+    {{ s['clarity'] }}, {{ s['completeness'] }}, {{ s['keyword_richness'] }},
+    {{ s['role_definition'] }}, {{ s['attractiveness'] }}, {{ s['seniority_alignment'] }}
+  ].map(v => v / 100);
+  const colors = ['#6366f1','#06b6d4','#10b981','#f59e0b','#ec4899','#8b5cf6'];
+  const n = labels.length;
+  const step = (Math.PI * 2) / n;
+
+  function pt(i, frac) {
+    const a = i * step - Math.PI / 2;
+    return [cx + frac * r * Math.cos(a), cy + frac * r * Math.sin(a)];
+  }
+
+  // Grid rings
+  ctx.strokeStyle = '#e5e7eb';
+  ctx.lineWidth = 1;
+  [0.25, 0.5, 0.75, 1].forEach(frac => {
+    ctx.beginPath();
+    for (let i = 0; i < n; i++) {
+      const [x, y] = pt(i, frac);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    }
+    ctx.closePath();
+    ctx.stroke();
+  });
+
+  // Spokes
+  for (let i = 0; i < n; i++) {
+    ctx.beginPath();
+    ctx.moveTo(cx, cy);
+    const [x, y] = pt(i, 1);
+    ctx.lineTo(x, y);
+    ctx.strokeStyle = '#e5e7eb';
+    ctx.stroke();
+  }
+
+  // Data polygon fill
+  ctx.beginPath();
+  values.forEach((v, i) => {
+    const [x, y] = pt(i, v);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.closePath();
+  ctx.fillStyle = 'rgba(99,102,241,0.18)';
+  ctx.fill();
+  ctx.strokeStyle = '#6366f1';
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // Dots
+  values.forEach((v, i) => {
+    const [x, y] = pt(i, v);
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fillStyle = colors[i];
+    ctx.fill();
+  });
+
+  // Labels
+  ctx.font = '11px Helvetica, Arial, sans-serif';
+  ctx.fillStyle = '#6b7280';
+  ctx.textAlign = 'center';
+  labels.forEach((lbl, i) => {
+    const [x, y] = pt(i, 1.22);
+    ctx.fillText(lbl, x, y);
+  });
+})();
+{% endif %}
+</script>
+{% endblock %}
