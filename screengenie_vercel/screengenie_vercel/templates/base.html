@@ -487,6 +487,9 @@ h1 { font-size: 30px; font-weight: 800; letter-spacing: -.02em; margin-bottom: 8
       <a class="nav-item {% if active=='history' %}active{% endif %}" href="{{ url_for('history') }}">
         <span class="ico">🕘</span> Scan History
       </a>
+      <a class="nav-item {% if active=='jd-analysis' %}active{% endif %}" href="{{ url_for('jd_analysis') }}">
+        <span class="ico">🔬</span> JD Analysis
+      </a>
       <a class="nav-item {% if active=='dashboard' %}active{% endif %}" href="{{ url_for('dashboard') }}">
         <span class="ico">📊</span> Dashboard
       </a>
