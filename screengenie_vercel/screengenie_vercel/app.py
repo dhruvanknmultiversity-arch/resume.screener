@@ -28,6 +28,9 @@ from parsing import (
     analyze_resume_with_claude,
     grade_for_score,
     status_for_score,
+    analyze_jd_quality,
+    analyze_jd_quality_with_claude,
+    fix_jd_with_claude,
 )
 
 app = Flask(__name__)
@@ -158,6 +161,32 @@ def init_db():
     # Columns added after v1 — safe to run repeatedly
     cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS duration_seconds REAL")
     cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS engine TEXT")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS jd_analyses (
+            id SERIAL PRIMARY KEY,
+            jd_filename TEXT,
+            jd_text TEXT,
+            description TEXT,
+            overall_score INTEGER,
+            scores TEXT,
+            missing_sections TEXT,
+            missing_keywords TEXT,
+            issues TEXT,
+            strengths TEXT,
+            suggestions TEXT,
+            seniority_level TEXT,
+            detected_role TEXT,
+            created_at TEXT
+        )
+    """)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS jd_fixes (
+            id SERIAL PRIMARY KEY,
+            analysis_id INTEGER REFERENCES jd_analyses(id),
+            fixed_jd_text TEXT,
+            created_at TEXT
+        )
+    """)
     db.commit()
     cur.close()
     db.close()
@@ -558,6 +587,258 @@ def dashboard():
         shortlisted=shortlisted, avg_score=avg_score,
         buckets=buckets, grade_counts=grade_counts,
         top_candidates=top_candidates, recent_scans=recent_scans,
+    )
+
+
+# ── JD Analysis ──────────────────────────────────────────────────────────────
+
+@app.route("/jd-analysis")
+def jd_analysis():
+    return render_template("jd_analysis.html")
+
+
+@app.route("/jd-analyze", methods=["POST"])
+def jd_analyze():
+    jd_file = request.files.get("jd_file")
+    description = request.form.get("description", "").strip()
+
+    if not jd_file or jd_file.filename == "":
+        flash("Please upload a JD file.")
+        return redirect(url_for("jd_analysis"))
+
+    jd_text = extract_text_from_file(jd_file.filename, jd_file.stream)
+    if not jd_text.strip():
+        flash("Could not read text from the JD file.")
+        return redirect(url_for("jd_analysis"))
+
+    document_loading_overlay = True  # noqa — triggers loading overlay in template
+    result = analyze_jd_quality_with_claude(jd_text, description) or analyze_jd_quality(jd_text)
+
+    scores = {
+        "clarity": result["clarity_score"],
+        "completeness": result["completeness_score"],
+        "keyword_richness": result["keyword_richness_score"],
+        "role_definition": result["role_definition_score"],
+        "attractiveness": result["attractiveness_score"],
+        "seniority_alignment": result["seniority_alignment_score"],
+    }
+
+    db = connect_db()
+    cur = db.cursor()
+    cur.execute(
+        "INSERT INTO jd_analyses (jd_filename, jd_text, description, overall_score, scores, "
+        "missing_sections, missing_keywords, issues, strengths, suggestions, "
+        "seniority_level, detected_role, created_at) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+        (jd_file.filename, jd_text, description, result["overall_score"],
+         json.dumps(scores), json.dumps(result["missing_sections"]),
+         json.dumps(result["missing_keywords"]), json.dumps(result["issues"]),
+         json.dumps(result["strengths"]), json.dumps(result["suggestions"]),
+         result["seniority_level"], result["detected_role"],
+         datetime.utcnow().isoformat()),
+    )
+    analysis_id = cur.fetchone()[0]
+    db.commit()
+    cur.close()
+    db.close()
+    return redirect(url_for("jd_analysis_result", analysis_id=analysis_id))
+
+
+@app.route("/jd-analysis/<int:analysis_id>")
+def jd_analysis_result(analysis_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT * FROM jd_analyses WHERE id = %s", (analysis_id,))
+    row = fetchone_dict(cur)
+    if not row:
+        flash("Analysis not found.")
+        return redirect(url_for("jd_analysis"))
+    cur.execute(
+        "SELECT id FROM jd_fixes WHERE analysis_id = %s ORDER BY id DESC LIMIT 1",
+        (analysis_id,),
+    )
+    fix_row = cur.fetchone()
+    fix_id = fix_row[0] if fix_row else None
+    cur.close()
+
+    row["scores"] = json.loads(row["scores"])
+    row["missing_sections"] = json.loads(row["missing_sections"])
+    row["missing_keywords"] = json.loads(row["missing_keywords"])
+    row["issues"] = json.loads(row["issues"])
+    row["strengths"] = json.loads(row["strengths"])
+    row["suggestions"] = json.loads(row["suggestions"])
+    return render_template("jd_analysis.html", analysis=row, fix_id=fix_id)
+
+
+@app.route("/jd-analysis/<int:analysis_id>/fix", methods=["POST"])
+def jd_fix(analysis_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT * FROM jd_analyses WHERE id = %s", (analysis_id,))
+    row = fetchone_dict(cur)
+    cur.close()
+    if not row:
+        flash("Analysis not found.")
+        return redirect(url_for("jd_analysis"))
+
+    analysis_data = {
+        "issues": json.loads(row["issues"]),
+        "suggestions": json.loads(row["suggestions"]),
+        "missing_keywords": json.loads(row["missing_keywords"]),
+        "missing_sections": json.loads(row["missing_sections"]),
+    }
+
+    fixed_text = fix_jd_with_claude(row["jd_text"], row["description"], analysis_data)
+    if not fixed_text:
+        flash("Could not generate improved JD. Please try again.")
+        return redirect(url_for("jd_analysis_result", analysis_id=analysis_id))
+
+    db2 = connect_db()
+    cur2 = db2.cursor()
+    cur2.execute(
+        "INSERT INTO jd_fixes (analysis_id, fixed_jd_text, created_at) "
+        "VALUES (%s,%s,%s) RETURNING id",
+        (analysis_id, fixed_text, datetime.utcnow().isoformat()),
+    )
+    fix_id = cur2.fetchone()[0]
+    db2.commit()
+    cur2.close()
+    db2.close()
+    return redirect(url_for("jd_fix_result", fix_id=fix_id))
+
+
+@app.route("/jd-fix/<int:fix_id>")
+def jd_fix_result(fix_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        "SELECT f.id, f.fixed_jd_text, f.created_at, f.analysis_id, "
+        "a.detected_role, a.jd_filename, a.overall_score "
+        "FROM jd_fixes f JOIN jd_analyses a ON a.id = f.analysis_id "
+        "WHERE f.id = %s",
+        (fix_id,),
+    )
+    row = fetchone_dict(cur)
+    cur.close()
+    if not row:
+        flash("Fix not found.")
+        return redirect(url_for("jd_analysis"))
+    return render_template("jd_fix.html", fix=row)
+
+
+@app.route("/jd-fix/<int:fix_id>/download/pdf")
+def jd_fix_download_pdf(fix_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT fixed_jd_text FROM jd_fixes WHERE id = %s", (fix_id,))
+    row = fetchone_dict(cur)
+    cur.close()
+    if not row:
+        abort(404)
+
+    try:
+        from fpdf import FPDF
+
+        class _PDF(FPDF):
+            def header(self):
+                self.set_font("Helvetica", "B", 9)
+                self.set_text_color(150, 150, 150)
+                self.cell(0, 8, "Generated by Screen Genie", ln=True, align="R")
+                self.ln(2)
+
+        pdf = _PDF()
+        pdf.add_page()
+        pdf.set_auto_page_break(auto=True, margin=18)
+        pdf.set_margins(18, 18, 18)
+
+        for line in row["fixed_jd_text"].split("\n"):
+            stripped = line.strip()
+            if not stripped:
+                pdf.ln(3)
+                continue
+            if stripped.startswith("# ") or (stripped.isupper() and len(stripped) < 80):
+                pdf.set_font("Helvetica", "B", 15)
+                pdf.set_text_color(17, 17, 20)
+                pdf.multi_cell(0, 9, stripped.lstrip("# "))
+                pdf.ln(2)
+            elif stripped.startswith("## ") or (stripped.endswith(":") and len(stripped) < 55):
+                pdf.set_font("Helvetica", "B", 12)
+                pdf.set_text_color(37, 99, 235)
+                pdf.multi_cell(0, 8, stripped.lstrip("# ").rstrip(":") + ":")
+                pdf.set_text_color(17, 17, 20)
+                pdf.ln(1)
+            elif stripped.startswith(("- ", "• ", "* ")):
+                pdf.set_font("Helvetica", size=11)
+                pdf.set_text_color(30, 30, 30)
+                pdf.multi_cell(0, 6, "  •  " + stripped.lstrip("-•* "))
+            else:
+                pdf.set_font("Helvetica", size=11)
+                pdf.set_text_color(30, 30, 30)
+                pdf.multi_cell(0, 6, stripped)
+
+        return Response(
+            bytes(pdf.output()),
+            mimetype="application/pdf",
+            headers={"Content-Disposition": f"attachment; filename=improved_jd_{fix_id}.pdf"},
+        )
+    except ImportError:
+        return Response(
+            row["fixed_jd_text"],
+            mimetype="text/plain",
+            headers={"Content-Disposition": f"attachment; filename=improved_jd_{fix_id}.txt"},
+        )
+
+
+@app.route("/jd-fix/<int:fix_id>/download/json")
+def jd_fix_download_json(fix_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        "SELECT f.fixed_jd_text, f.created_at, a.jd_filename, a.detected_role, "
+        "a.overall_score, a.missing_keywords "
+        "FROM jd_fixes f JOIN jd_analyses a ON a.id = f.analysis_id "
+        "WHERE f.id = %s",
+        (fix_id,),
+    )
+    row = fetchone_dict(cur)
+    cur.close()
+    if not row:
+        abort(404)
+
+    sections = {}
+    current_section = "header"
+    current_lines = []
+    for line in row["fixed_jd_text"].split("\n"):
+        s = line.strip()
+        if not s:
+            continue
+        is_heading = s.startswith("#") or (s.endswith(":") and len(s) < 60 and not s.startswith("-"))
+        if is_heading:
+            if current_lines:
+                sections[current_section] = "\n".join(current_lines).strip()
+            current_section = s.lstrip("#").rstrip(":").strip()
+            current_lines = []
+        else:
+            current_lines.append(s)
+    if current_lines:
+        sections[current_section] = "\n".join(current_lines).strip()
+
+    output = {
+        "metadata": {
+            "source_file": row["jd_filename"],
+            "detected_role": row["detected_role"],
+            "original_quality_score": row["overall_score"],
+            "generated_at": row["created_at"],
+            "generated_by": "Screen Genie — Claude AI",
+        },
+        "full_text": row["fixed_jd_text"],
+        "sections": sections,
+        "added_keywords": json.loads(row["missing_keywords"]) if row["missing_keywords"] else [],
+    }
+    return Response(
+        json.dumps(output, indent=2, ensure_ascii=False),
+        mimetype="application/json",
+        headers={"Content-Disposition": f"attachment; filename=improved_jd_{fix_id}.json"},
     )
 
 
