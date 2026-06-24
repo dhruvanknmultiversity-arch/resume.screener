@@ -1,23 +1,60 @@
 {% extends 'base.html' %}
 {% set active = 'history' %}
 {% set show_back = true %}
-{% block title %}Scan History{% endblock %}
+{% block title %}History{% endblock %}
 {% block content %}
 <div class="page-head">
   <div>
     <div class="eyebrow">Activity</div>
-    <h1>Scan History</h1>
-    <p class="lede">Every bulk screening run is saved here. Open one to see its ranked candidate board.</p>
+    <h1>History</h1>
+    <p class="lede">All your bulk resume screenings and JD analyses in one place.</p>
+  </div>
+  <div class="head-stats">
+    <div class="stat-mini"><span>Screenings</span> {{ scans|length }}</div>
+    <div class="stat-mini"><span>JD Analyses</span> {{ jd_analyses|length }}</div>
   </div>
 </div>
 
+{# ── Tab switcher ── #}
+<div style="display:flex; gap:0; margin-bottom:22px; border-bottom:2px solid var(--border);">
+  <button class="tab-btn active" id="tab-screening" onclick="switchTab('screening')">
+    ⚡ Resume Screening History
+    <span class="tab-count">{{ scans|length }}</span>
+  </button>
+  <button class="tab-btn" id="tab-jd" onclick="switchTab('jd')">
+    🔬 JD Analysis History
+    <span class="tab-count">{{ jd_analyses|length }}</span>
+  </button>
+</div>
+
+<style>
+.tab-btn {
+  background: none; border: none; padding: 10px 22px 12px;
+  font-size: 14px; font-weight: 600; color: var(--muted);
+  cursor: pointer; border-bottom: 3px solid transparent;
+  margin-bottom: -2px; transition: .15s; display: inline-flex; align-items: center; gap: 8px;
+}
+.tab-btn.active { color: var(--text); border-bottom-color: #6366f1; }
+.tab-btn:hover:not(.active) { color: var(--text); }
+.tab-count {
+  background: var(--soft); border: 1px solid var(--border);
+  border-radius: 999px; font-size: 11px; font-weight: 700;
+  padding: 2px 8px; color: var(--muted);
+}
+.tab-btn.active .tab-count { background: #ede9fe; border-color: #c4b5fd; color: #7c3aed; }
+</style>
+
+{# ══════════════════════════════════════════════════════════
+   Tab 1: Resume Screening History
+══════════════════════════════════════════════════════════ #}
+<div id="panel-screening">
 {% if scans %}
 <div class="toolbar">
-  <input type="text" id="history-search" class="toolbar-search" placeholder="🔍 Search by JD file or role…">
-  <span class="toolbar-count" id="history-count"></span>
+  <input type="text" id="screening-search" class="toolbar-search" placeholder="🔍 Search by JD file or role…">
+  <span class="toolbar-count" id="screening-count"></span>
 </div>
 <div class="card table-card">
-  <table class="rank-table" id="history-table">
+  <table class="rank-table">
     <thead>
       <tr>
         <th>Date</th>
@@ -30,7 +67,7 @@
     </thead>
     <tbody>
       {% for s in scans %}
-      <tr class="hist-row" data-search="{{ (s['jd_filename'] ~ ' ' ~ (s['jd_role'] or ''))|lower }}">
+      <tr class="scan-row" data-search="{{ (s['jd_filename'] ~ ' ' ~ (s['jd_role'] or ''))|lower }}">
         <td>{{ s['created_at'][:10] }} <span class="muted">{{ s['created_at'][11:16] }}</span></td>
         <td><strong>{{ s['jd_filename'] }}</strong></td>
         <td class="muted">{{ s['jd_role'] }}</td>
@@ -39,7 +76,7 @@
         <td class="row-actions">
           <a class="ghost-btn" href="{{ url_for('results', scan_id=s['id']) }}">Open →</a>
           <button class="ghost-btn danger" type="button"
-            onclick="openDeleteModal('{{ url_for('delete_scan', scan_id=s['id']) }}', '{{ s['jd_filename']|replace("'", "\\'") }}')">Delete</button>
+            onclick="openDeleteModal('{{ url_for('delete_scan', scan_id=s['id']) }}', '{{ s['jd_filename']|replace("'", "\\'") }}', 'scan')">Delete</button>
         </td>
       </tr>
       {% endfor %}
@@ -49,17 +86,67 @@
 {% else %}
 <div class="empty card">
   <div class="empty-ico">🕘</div>
-  <h3>No scans yet</h3>
-  <p>Run your first bulk screening to populate the history.</p>
+  <h3>No screenings yet</h3>
+  <p>Run your first bulk screening to see it here.</p>
   <a class="primary-btn" href="{{ url_for('index') }}">⚡ Start a Bulk Scan</a>
 </div>
 {% endif %}
+</div>
 
-{# ── Delete confirmation modal ── #}
+{# ══════════════════════════════════════════════════════════
+   Tab 2: JD Analysis History
+══════════════════════════════════════════════════════════ #}
+<div id="panel-jd" style="display:none;">
+{% if jd_analyses %}
+<div class="toolbar">
+  <input type="text" id="jd-search" class="toolbar-search" placeholder="🔍 Search by filename or role…">
+  <span class="toolbar-count" id="jd-count"></span>
+</div>
+<div class="card table-card">
+  <table class="rank-table">
+    <thead>
+      <tr>
+        <th>Date</th>
+        <th>JD File</th>
+        <th>Detected Role</th>
+        <th>Seniority</th>
+        <th>Quality Score</th>
+        <th></th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in jd_analyses %}
+      <tr class="jd-row" data-search="{{ (a['jd_filename'] ~ ' ' ~ (a['detected_role'] or ''))|lower }}">
+        <td>{{ a['created_at'][:10] }} <span class="muted">{{ a['created_at'][11:16] }}</span></td>
+        <td><strong>{{ a['jd_filename'] }}</strong></td>
+        <td class="muted">{{ a['detected_role'] }}</td>
+        <td><span class="pill p-jd">{{ a['seniority_level'] or '—' }}</span></td>
+        <td><div class="score-orb {{ 'high' if a['overall_score']>=70 else ('mid' if a['overall_score']>=45 else 'low') }}">{{ a['overall_score'] }}</div></td>
+        <td class="row-actions">
+          <a class="ghost-btn" href="{{ url_for('jd_analysis_result', analysis_id=a['id']) }}">Open →</a>
+          <button class="ghost-btn danger" type="button"
+            onclick="openDeleteModal('{{ url_for('delete_jd_analysis', analysis_id=a['id']) }}', '{{ a['jd_filename']|replace("'", "\\'") }}', 'jd')">Delete</button>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% else %}
+<div class="empty card">
+  <div class="empty-ico">🔬</div>
+  <h3>No JD analyses yet</h3>
+  <p>Analyse a Job Description to see quality scores and improvements here.</p>
+  <a class="primary-btn" href="{{ url_for('jd_analysis') }}">🔬 Analyse a JD</a>
+</div>
+{% endif %}
+</div>
+
+{# ── Shared delete modal ── #}
 <div class="modal-overlay hidden" id="delete-modal">
   <div class="modal" style="max-width:420px; text-align:center;">
     <div style="font-size:40px; margin-bottom:12px;">🗑️</div>
-    <h3 style="margin-bottom:8px; font-size:18px;">Delete this scan?</h3>
+    <h3 style="margin-bottom:8px; font-size:18px;">Delete this record?</h3>
     <p class="muted" id="delete-modal-desc" style="margin-bottom:20px; font-size:13px;"></p>
     <div style="display:flex; gap:10px; justify-content:center;">
       <button type="button" class="ghost-btn" id="delete-cancel">Cancel</button>
@@ -70,27 +157,59 @@
   </div>
 </div>
 
-{% if scans %}
 <script>
-const hrows = Array.from(document.querySelectorAll('.hist-row'));
-const hs = document.getElementById('history-search');
-const hc = document.getElementById('history-count');
-function filterHistory(){
-  const q = hs.value.trim().toLowerCase();
+// ── Tab switching ──
+function switchTab(tab) {
+  document.getElementById('panel-screening').style.display = tab === 'screening' ? '' : 'none';
+  document.getElementById('panel-jd').style.display       = tab === 'jd'         ? '' : 'none';
+  document.getElementById('tab-screening').classList.toggle('active', tab === 'screening');
+  document.getElementById('tab-jd').classList.toggle('active', tab === 'jd');
+  // persist choice so back-navigation lands on same tab
+  sessionStorage.setItem('history-tab', tab);
+}
+
+// Restore last tab on load
+const savedTab = sessionStorage.getItem('history-tab');
+if (savedTab === 'jd') switchTab('jd');
+
+// ── Search: screening ──
+const scanRows = Array.from(document.querySelectorAll('.scan-row'));
+const scanSearch = document.getElementById('screening-search');
+const scanCount  = document.getElementById('screening-count');
+function filterScans() {
+  const q = (scanSearch ? scanSearch.value.trim().toLowerCase() : '');
   let shown = 0;
-  hrows.forEach(r => {
+  scanRows.forEach(r => {
     const ok = !q || r.dataset.search.includes(q);
     r.style.display = ok ? '' : 'none';
     if (ok) shown++;
   });
-  hc.textContent = shown + ' of ' + hrows.length + ' scans';
+  if (scanCount) scanCount.textContent = shown + ' of ' + scanRows.length + ' scans';
 }
-hs.addEventListener('input', filterHistory);
-filterHistory();
+if (scanSearch) { scanSearch.addEventListener('input', filterScans); filterScans(); }
 
-function openDeleteModal(action, filename) {
+// ── Search: JD analyses ──
+const jdRows   = Array.from(document.querySelectorAll('.jd-row'));
+const jdSearch = document.getElementById('jd-search');
+const jdCount  = document.getElementById('jd-count');
+function filterJd() {
+  const q = (jdSearch ? jdSearch.value.trim().toLowerCase() : '');
+  let shown = 0;
+  jdRows.forEach(r => {
+    const ok = !q || r.dataset.search.includes(q);
+    r.style.display = ok ? '' : 'none';
+    if (ok) shown++;
+  });
+  if (jdCount) jdCount.textContent = shown + ' of ' + jdRows.length + ' analyses';
+}
+if (jdSearch) { jdSearch.addEventListener('input', filterJd); filterJd(); }
+
+// ── Delete modal ──
+function openDeleteModal(action, filename, type) {
   document.getElementById('delete-form').action = action;
-  document.getElementById('delete-modal-desc').textContent = '"' + filename + '" and all its candidates will be permanently removed.';
+  const label = type === 'jd' ? 'JD analysis' : 'scan';
+  document.getElementById('delete-modal-desc').textContent =
+    '"' + filename + '" and all its ' + (type === 'jd' ? 'fixes' : 'candidates') + ' will be permanently removed.';
   document.getElementById('delete-modal').classList.remove('hidden');
 }
 document.getElementById('delete-cancel').addEventListener('click', () => {
@@ -101,5 +220,4 @@ document.getElementById('delete-modal').addEventListener('click', e => {
     document.getElementById('delete-modal').classList.add('hidden');
 });
 </script>
-{% endif %}
 {% endblock %}
