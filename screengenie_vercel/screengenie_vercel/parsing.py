@@ -1143,3 +1143,234 @@ def status_for_score(score):
     if score >= 45:
         return "Review"
     return "Reject"
+
+
+# ============================================================
+# JD Quality Analysis
+# ============================================================
+
+_JD_ANALYSIS_SCHEMA = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "overall_score": {"type": "integer"},
+        "clarity_score": {"type": "integer"},
+        "completeness_score": {"type": "integer"},
+        "keyword_richness_score": {"type": "integer"},
+        "role_definition_score": {"type": "integer"},
+        "attractiveness_score": {"type": "integer"},
+        "seniority_alignment_score": {"type": "integer"},
+        "missing_sections": {"type": "array", "items": {"type": "string"}},
+        "missing_keywords": {"type": "array", "items": {"type": "string"}},
+        "issues": {"type": "array", "items": {"type": "string"}},
+        "strengths": {"type": "array", "items": {"type": "string"}},
+        "suggestions": {"type": "array", "items": {"type": "string"}},
+        "seniority_level": {"type": "string"},
+        "detected_role": {"type": "string"},
+    },
+    "required": [
+        "overall_score", "clarity_score", "completeness_score",
+        "keyword_richness_score", "role_definition_score",
+        "attractiveness_score", "seniority_alignment_score",
+        "missing_sections", "missing_keywords", "issues",
+        "strengths", "suggestions", "seniority_level", "detected_role",
+    ],
+}
+
+_JD_SECTION_HINTS = ["responsibilities", "requirements", "qualifications",
+                     "about", "benefits", "skills", "compensation", "culture"]
+
+
+def analyze_jd_quality(jd_text):
+    """Rule-based JD quality analysis — used as fallback when Claude is unavailable."""
+    lower = jd_text.lower()
+    word_count = len(tokenize(jd_text))
+
+    section_hits = sum(1 for s in _JD_SECTION_HINTS if s in lower)
+    completeness = round((section_hits / len(_JD_SECTION_HINTS)) * 100)
+
+    skills = extract_skills(jd_text)
+    keyword_richness = min(100, len(skills) * 9)
+
+    if word_count < 80:    clarity = 25
+    elif word_count < 200: clarity = 55
+    elif word_count < 400: clarity = 75
+    else:                  clarity = 90
+
+    has_years = bool(YEARS_RE.search(jd_text))
+    level_words = ["senior", "junior", "lead", "manager", "intern", "entry", "mid-level", "associate"]
+    has_level = any(w in lower for w in level_words)
+    role_definition = 40 + (30 if has_years else 0) + (30 if has_level else 0)
+    attractiveness = 50
+    seniority_alignment = 55
+
+    overall = round(0.20 * clarity + 0.20 * completeness + 0.20 * keyword_richness
+                    + 0.15 * role_definition + 0.15 * attractiveness + 0.10 * seniority_alignment)
+
+    missing_sections = [s.title() for s in _JD_SECTION_HINTS if s not in lower]
+    issues, strengths, suggestions = [], [], []
+
+    if word_count < 150:
+        issues.append("JD is too short — lacks sufficient detail for candidates to evaluate fit")
+    if not has_years:
+        issues.append("No experience requirement (years) mentioned")
+    if not has_level:
+        issues.append("Seniority level not specified (Junior / Mid / Senior)")
+    if completeness < 50:
+        issues.append(f"Missing key sections: {', '.join(missing_sections[:3])}")
+
+    if word_count >= 300:
+        strengths.append("Good length with sufficient detail")
+    if len(skills) >= 5:
+        strengths.append(f"Contains {len(skills)} specific skill keywords")
+    if has_years:
+        strengths.append("Experience requirement is clearly stated")
+
+    if not has_years:
+        suggestions.append("Add a specific years-of-experience requirement (e.g. '2+ years')")
+    if not has_level:
+        suggestions.append("Specify the seniority level (Junior / Mid-Level / Senior)")
+    if completeness < 80:
+        suggestions.append("Add missing sections: " + ", ".join(missing_sections[:3]))
+    if len(skills) < 5:
+        suggestions.append("Add more specific technical skill requirements")
+
+    level_map = {"intern": "Internship", "junior": "Junior", "senior": "Senior",
+                 "lead": "Lead", "manager": "Manager", "associate": "Associate"}
+    seniority = next((v for k, v in level_map.items() if k in lower), "Mid-Level")
+    detected_role = next((l.strip()[:80] for l in jd_text.splitlines() if l.strip()), "Unknown Role")
+
+    return {
+        "overall_score": overall,
+        "clarity_score": clarity,
+        "completeness_score": completeness,
+        "keyword_richness_score": keyword_richness,
+        "role_definition_score": role_definition,
+        "attractiveness_score": attractiveness,
+        "seniority_alignment_score": seniority_alignment,
+        "missing_sections": missing_sections,
+        "missing_keywords": [],
+        "issues": issues,
+        "strengths": strengths,
+        "suggestions": suggestions,
+        "seniority_level": seniority,
+        "detected_role": detected_role,
+    }
+
+
+def analyze_jd_quality_with_claude(jd_text, description=""):
+    """Claude-powered JD quality analysis."""
+    try:
+        import anthropic
+    except ImportError:
+        return None
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+
+    client = _get_claude_client()
+    desc_hint = f"\nHiring manager's context: {description}" if description else ""
+
+    prompt = (
+        "You are an expert HR consultant reviewing a Job Description for quality, "
+        "effectiveness, and ATS-readiness.\n\n"
+        "=== JOB DESCRIPTION ===\n"
+        f"{jd_text[:20000]}\n"
+        f"{desc_hint}\n\n"
+        "Score each dimension 0-100. Be strict: 0-40 poor, 41-60 average, 61-80 good, 81+ excellent.\n"
+        "Dimensions:\n"
+        "- clarity_score: Are responsibilities and expectations crystal clear?\n"
+        "- completeness_score: All sections present? (summary, responsibilities, requirements, qualifications, company info)\n"
+        "- keyword_richness_score: Relevant technical/domain keywords that ATS and candidates search for?\n"
+        "- role_definition_score: Seniority, team context, reporting structure, scope of work clear?\n"
+        "- attractiveness_score: Would strong candidates want to apply? (growth, culture, comp hinted)\n"
+        "- seniority_alignment_score: JD content matches implied/stated seniority level?\n"
+        "- overall_score: Weighted overall (clarity 20%, completeness 20%, keywords 20%, "
+        "role_def 15%, attractiveness 15%, seniority 10%)\n\n"
+        "missing_keywords: important domain/technical keywords absent from this JD.\n"
+        "missing_sections: section names that should exist but are absent.\n"
+        "issues: specific problems (3-6 items).\n"
+        "strengths: what the JD does well (2-4 items).\n"
+        "suggestions: actionable improvements (3-6 items).\n"
+        "seniority_level: one of Internship / Junior / Mid-Level / Senior / Lead / Manager.\n"
+        "detected_role: the job title as a short string.\n\n"
+        "Return ONLY the JSON object."
+    )
+
+    try:
+        with _claude_semaphore:
+            try:
+                resp = _call_claude_with_retry(
+                    client,
+                    model="claude-opus-4-8",
+                    max_tokens=2048,
+                    thinking={"type": "adaptive"},
+                    messages=[{"role": "user", "content": prompt}],
+                    output_config={"format": {"type": "json_schema", "schema": _JD_ANALYSIS_SCHEMA}},
+                )
+            except TypeError:
+                resp = _call_claude_with_retry(
+                    client,
+                    model="claude-opus-4-8",
+                    max_tokens=2048,
+                    thinking={"type": "adaptive"},
+                    messages=[{"role": "user", "content": prompt}],
+                )
+        result_text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
+        return json.loads(_strip_json(result_text))
+    except Exception as e:
+        _claude_debug(f"JD quality analysis failed: {e}")
+        return None
+
+
+def fix_jd_with_claude(jd_text, description, analysis):
+    """Rewrite and improve the JD based on the analysis findings."""
+    try:
+        import anthropic
+    except ImportError:
+        return None
+    if not os.environ.get("ANTHROPIC_API_KEY"):
+        return None
+
+    client = _get_claude_client()
+    issues_text = "\n".join(f"- {i}" for i in analysis.get("issues", []))
+    missing_kw = ", ".join(analysis.get("missing_keywords", []))
+    missing_sec = ", ".join(analysis.get("missing_sections", []))
+    suggestions_text = "\n".join(f"- {s}" for s in analysis.get("suggestions", []))
+    desc_hint = f"\nHiring manager context: {description}" if description else ""
+
+    prompt = (
+        "You are an expert HR consultant rewriting a Job Description to make it more "
+        "effective, ATS-friendly, and attractive to qualified candidates.\n\n"
+        "=== ORIGINAL JD ===\n"
+        f"{jd_text[:20000]}\n"
+        f"{desc_hint}\n\n"
+        "=== WHAT TO FIX ===\n"
+        f"Issues:\n{issues_text or 'None critical'}\n\n"
+        f"Missing keywords to weave in naturally: {missing_kw or 'None'}\n"
+        f"Missing sections to add: {missing_sec or 'None'}\n\n"
+        f"Suggestions:\n{suggestions_text or 'None'}\n\n"
+        "STRICT RULES:\n"
+        "1. Keep ALL existing accurate information — do not remove or contradict anything\n"
+        "2. Add missing keywords naturally into responsibilities/requirements — no fabrication\n"
+        "3. Add missing sections with realistic content inferred from the original\n"
+        "4. Use [Company Name] / [Location] placeholders only where truly unknown\n"
+        "5. Do NOT invent qualifications, years, or skills not implied by the original\n"
+        "6. Use clear headings: Job Title · About the Role · Key Responsibilities · "
+        "Requirements · Nice to Have · What We Offer · About [Company Name]\n"
+        "7. Return ONLY the improved JD text — no commentary, no markdown fences."
+    )
+
+    try:
+        with _claude_semaphore:
+            resp = _call_claude_with_retry(
+                client,
+                model="claude-opus-4-8",
+                max_tokens=4096,
+                thinking={"type": "adaptive"},
+                messages=[{"role": "user", "content": prompt}],
+            )
+        result_text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
+        return result_text.strip() if result_text else None
+    except Exception as e:
+        _claude_debug(f"JD fix failed: {e}")
+        return None
