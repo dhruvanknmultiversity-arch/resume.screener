@@ -9,8 +9,8 @@
     <h1>Ranked Candidates</h1>
     <p class="lede"><strong>JD:</strong> {{ scan['jd_filename'] }} · <strong>Detected role:</strong> {{ scan['jd_role'] }}</p>
     <div class="scan-meta">
-      {% if scan['engine'] %}<span class="engine-badge {{ 'ai' if scan['engine']=='Claude AI' else 'rule' }}">
-        {{ '🤖 Powered by Claude AI' if scan['engine']=='Claude AI' else '⚙ Rule-based engine' }}</span>{% endif %}
+      {% if scan['engine'] %}<span class="engine-badge {{ 'ai' if scan['engine']=='Screen Genie Engine' else 'rule' }}">
+        {{ '🤖 Powered by Screen Genie Engine' if scan['engine']=='Screen Genie Engine' else '⚙ Rule-based engine' }}</span>{% endif %}
       <span class="muted">Scanned {{ scan['created_at'][:10] }} at {{ scan['created_at'][11:16] }}</span>
       {% if scan['duration_seconds'] %}<span class="muted">· took
         {% set d = scan['duration_seconds']|int %}
