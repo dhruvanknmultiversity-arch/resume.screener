@@ -10,10 +10,31 @@
   </div>
 </div>
 
-<div class="section-head" style="display:flex;align-items:center;gap:10px;margin:6px 0 16px;">
-  <span style="font-size:18px;">⚡</span>
-  <h2 style="font-size:18px;font-weight:800;margin:0;">Resume Screening</h2>
+{# ── Tab switcher (same style as History) ── #}
+<div style="display:flex; gap:0; margin-bottom:22px; border-bottom:2px solid var(--border);">
+  <button class="tab-btn active" id="tab-screening" onclick="switchTab('screening')">
+    ⚡ Resume Screening
+  </button>
+  <button class="tab-btn" id="tab-jd" onclick="switchTab('jd')">
+    🔬 JD Analysis
+  </button>
 </div>
+
+<style>
+.tab-btn {
+  background: none; border: none; padding: 10px 22px 12px;
+  font-size: 14px; font-weight: 600; color: var(--muted);
+  cursor: pointer; border-bottom: 3px solid transparent;
+  margin-bottom: -2px; transition: .15s; display: inline-flex; align-items: center; gap: 8px;
+}
+.tab-btn.active { color: var(--text); border-bottom-color: #6366f1; }
+.tab-btn:hover:not(.active) { color: var(--text); }
+</style>
+
+{# ══════════════════════════════════════════════════════════
+   Tab 1: Resume Screening
+══════════════════════════════════════════════════════════ #}
+<div id="panel-screening">
 
 <div class="kpi-grid">
   <div class="kpi card"><div class="kpi-ico b1">📄</div><div><div class="kpi-label">Resumes Screened</div><div class="kpi-val">{{ total_resumes }}</div></div></div>
@@ -80,13 +101,12 @@
   </div>
 </div>
 
+</div> {# end panel-screening #}
+
 {# ══════════════════════════════════════════════════════════
-   JD ANALYSIS OVERVIEW
+   Tab 2: JD Analysis
 ══════════════════════════════════════════════════════════ #}
-<div class="section-head" style="display:flex;align-items:center;gap:10px;margin:34px 0 16px;padding-top:22px;border-top:1px solid var(--border);">
-  <span style="font-size:18px;">🔬</span>
-  <h2 style="font-size:18px;font-weight:800;margin:0;">JD Analysis</h2>
-</div>
+<div id="panel-jd" style="display:none;">
 
 <div class="kpi-grid">
   <div class="kpi card"><div class="kpi-ico b1">🔬</div><div><div class="kpi-label">JDs Analysed</div><div class="kpi-val">{{ jd_stats['total_jds'] }}</div></div></div>
@@ -124,4 +144,17 @@
     {% else %}<p class="muted">No JD analyses yet. <a href="{{ url_for('jd_analysis') }}" style="color:var(--blue);font-weight:600;">Analyse one →</a></p>{% endif %}
   </div>
 </div>
+
+</div> {# end panel-jd #}
+
+<script>
+function switchTab(tab) {
+  document.getElementById('panel-screening').style.display = tab === 'screening' ? '' : 'none';
+  document.getElementById('panel-jd').style.display        = tab === 'jd'        ? '' : 'none';
+  document.getElementById('tab-screening').classList.toggle('active', tab === 'screening');
+  document.getElementById('tab-jd').classList.toggle('active', tab === 'jd');
+  sessionStorage.setItem('dashboard-tab', tab);
+}
+if (sessionStorage.getItem('dashboard-tab') === 'jd') switchTab('jd');
+</script>
 {% endblock %}
