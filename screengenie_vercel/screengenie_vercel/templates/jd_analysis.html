@@ -9,13 +9,13 @@
   <div>
     <div class="eyebrow">AI-Powered</div>
     <h1>JD Analysis</h1>
-    <p class="lede">Upload any Job Description and Claude AI will score its quality across 6 dimensions,
+    <p class="lede">Upload any Job Description and Screen Genie Engine will score its quality across 6 dimensions,
       identify missing keywords, flag issues, and let you generate an improved version — downloadable as PDF &amp; JSON.</p>
   </div>
   <div class="head-stats">
     <div class="stat-mini"><span>Input</span> PDF · DOCX · TXT</div>
     <div class="stat-mini"><span>Dims</span> 6 scored</div>
-    <div class="stat-mini"><span>Engine</span> Claude AI</div>
+    <div class="stat-mini"><span>Engine</span> Screen Genie Engine</div>
   </div>
 </div>
 
@@ -222,7 +222,7 @@
   <div class="loading-box">
     <div class="loading-spinner"></div>
     <h2 id="overlay-title">Analysing JD…</h2>
-    <p class="lede" id="overlay-msg">Claude AI is evaluating your Job Description across 6 quality dimensions.</p>
+    <p class="lede" id="overlay-msg">Screen Genie Engine is evaluating your Job Description across 6 quality dimensions.</p>
     <div class="loading-bar-wrap"><div class="loading-bar-fill"></div></div>
     <p class="muted" style="font-size:.8rem; margin-top:16px;">Keep this tab open — you'll be taken to results automatically.</p>
   </div>
@@ -271,7 +271,7 @@ document.getElementById('jda-form').addEventListener('submit', () => {
 function showFixOverlay() {
   const ov = document.getElementById('loading-overlay');
   document.getElementById('overlay-title').textContent = 'Generating Improved JD…';
-  document.getElementById('overlay-msg').textContent = 'Claude AI is rewriting your JD — fixing issues and adding missing keywords.';
+  document.getElementById('overlay-msg').textContent = 'Screen Genie Engine is rewriting your JD — fixing issues and adding missing keywords.';
   ov.classList.remove('hidden');
 }
 
