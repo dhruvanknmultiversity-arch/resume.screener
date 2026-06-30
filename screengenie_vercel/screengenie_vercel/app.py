@@ -80,7 +80,12 @@ def parse_db_url(url):
 
 def connect_db():
     """Open a fresh Postgres connection. Safe to call from background threads
-    (Flask's `g`/get_db is request-scoped and must not be shared across threads)."""
+    (Flask's `g`/get_db is request-scoped and must not be shared across threads).
+
+    A 10s socket timeout means a slow/unreachable DB fails fast with an error
+    page instead of hanging until Vercel kills the function (which looks like a
+    crash). For best performance on serverless, point DATABASE_URL at Supabase's
+    *connection pooler* (port 6543, transaction mode) — see deploy notes."""
     url = get_database_url()
     if not url or "://" not in url:
         raise RuntimeError(f"DATABASE_URL not set or invalid: '{url}'")
@@ -88,6 +93,7 @@ def connect_db():
     conn = pg8000.dbapi.connect(
         host=p["host"], port=p["port"], database=p["database"],
         user=p["user"], password=p["password"], ssl_context=True,
+        timeout=10,
     )
     conn.autocommit = False
     return conn
@@ -187,6 +193,10 @@ def init_db():
             created_at TEXT
         )
     """)
+    # Indexes — make per-scan candidate lookups and ranking fast
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_candidates_scan_id ON candidates (scan_id)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_candidates_score ON candidates (score DESC)")
+    cur.execute("CREATE INDEX IF NOT EXISTS idx_scans_created ON scans (created_at DESC)")
     db.commit()
     cur.close()
     db.close()
@@ -567,27 +577,34 @@ def delete_scan(scan_id):
 def dashboard():
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT id, jd_filename, jd_role, keywords, resume_count, avg_score, created_at FROM scans")
-    scans = fetchall_dict(cur)
-    cur.execute("SELECT id, scan_id, filename, name, score, grade, status FROM candidates")
-    candidates = fetchall_dict(cur)
 
-    total_resumes = len(candidates)
-    total_scans = len(scans)
-    shortlisted = sum(1 for c in candidates if c["status"] == "Shortlist")
-    avg_score = round(sum(c["score"] for c in candidates) / total_resumes, 1) if total_resumes else 0
+    # All KPIs computed in a single SQL pass — no longer pulls every candidate
+    # row into Python (which was the slow part as data grew).
+    cur.execute("""
+        SELECT
+            COUNT(*)                                          AS total_resumes,
+            COALESCE(ROUND(AVG(score)::numeric, 1), 0)        AS avg_score,
+            COUNT(*) FILTER (WHERE status = 'Shortlist')      AS shortlisted,
+            COUNT(*) FILTER (WHERE score < 40)                AS b0,
+            COUNT(*) FILTER (WHERE score >= 40 AND score < 60) AS b1,
+            COUNT(*) FILTER (WHERE score >= 60 AND score < 80) AS b2,
+            COUNT(*) FILTER (WHERE score >= 80)               AS b3,
+            COUNT(*) FILTER (WHERE grade = 'A')               AS ga,
+            COUNT(*) FILTER (WHERE grade = 'B')               AS gb,
+            COUNT(*) FILTER (WHERE grade = 'C')               AS gc,
+            COUNT(*) FILTER (WHERE grade = 'D')               AS gd
+        FROM candidates
+    """)
+    agg = fetchone_dict(cur)
 
-    buckets = {"0-39": 0, "40-59": 0, "60-79": 0, "80-100": 0}
-    for c in candidates:
-        s = c["score"]
-        if s < 40: buckets["0-39"] += 1
-        elif s < 60: buckets["40-59"] += 1
-        elif s < 80: buckets["60-79"] += 1
-        else: buckets["80-100"] += 1
+    cur.execute("SELECT COUNT(*) FROM scans")
+    total_scans = cur.fetchone()[0]
 
-    grade_counts = {"A": 0, "B": 0, "C": 0, "D": 0}
-    for c in candidates:
-        grade_counts[c["grade"]] = grade_counts.get(c["grade"], 0) + 1
+    total_resumes = agg["total_resumes"] or 0
+    avg_score = float(agg["avg_score"]) if total_resumes else 0
+    shortlisted = agg["shortlisted"] or 0
+    buckets = {"0-39": agg["b0"], "40-59": agg["b1"], "60-79": agg["b2"], "80-100": agg["b3"]}
+    grade_counts = {"A": agg["ga"], "B": agg["gb"], "C": agg["gc"], "D": agg["gd"]}
 
     cur.execute("SELECT id, scan_id, filename, name, score, grade, status FROM candidates ORDER BY score DESC LIMIT 8")
     top_candidates = fetchall_dict(cur)
@@ -856,12 +873,29 @@ def jd_fix_download_json(fix_id):
     )
 
 
-# Initialize DB on every cold start (Vercel serverless + local)
-try:
-    init_db()
-except Exception as _e:
-    import sys
-    print(f"[screen-genie] DB init warning: {_e}", file=sys.stderr)
+# DB schema is created once per process, lazily, on the first request that
+# needs it — NOT at import time. Running CREATE TABLE / ALTER / CREATE INDEX on
+# every cold start added latency to every page and could crash the function if
+# the DB was briefly slow. The flag ensures the (idempotent) init runs at most
+# once per warm instance.
+_DB_READY = False
+
+def ensure_db_ready():
+    global _DB_READY
+    if _DB_READY:
+        return
+    try:
+        init_db()
+        _DB_READY = True
+    except Exception as _e:
+        import sys
+        print(f"[screen-genie] DB init warning: {_e}", file=sys.stderr)
+
+
+@app.before_request
+def _before_request_db_init():
+    ensure_db_ready()
+
 
 if __name__ == "__main__":
     app.run(host="0.0.0.0", port=5000, debug=True)
