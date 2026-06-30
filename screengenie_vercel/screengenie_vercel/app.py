@@ -266,7 +266,7 @@ def run_scan_sync(jd_file_name, jd_text, jd_role, keywords, resume_docs):
     candidates.sort(key=lambda c: c["score"], reverse=True)
     avg_score = round(sum(c["score"] for c in candidates) / len(candidates), 1)
     duration = round(time.time() - start, 1)
-    engine = "Claude AI" if claude_count >= max(1, len(candidates) // 2) else "Rule-based"
+    engine = "Screen Genie Engine" if claude_count >= max(1, len(candidates) // 2) else "Rule-based"
 
     db = connect_db()
     cur = db.cursor()
@@ -843,7 +843,7 @@ def jd_fix_download_json(fix_id):
             "detected_role": row["detected_role"],
             "original_quality_score": row["overall_score"],
             "generated_at": row["created_at"],
-            "generated_by": "Screen Genie — Claude AI",
+            "generated_by": "Screen Genie Engine",
         },
         "full_text": row["fixed_jd_text"],
         "sections": sections,
