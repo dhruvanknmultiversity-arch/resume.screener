@@ -610,6 +610,41 @@ def dashboard():
     top_candidates = fetchall_dict(cur)
     cur.execute("SELECT id, jd_filename, jd_role, keywords, resume_count, avg_score, created_at FROM scans ORDER BY created_at DESC LIMIT 5")
     recent_scans = fetchall_dict(cur)
+
+    # ── JD Analysis KPIs (single SQL pass) ──
+    cur.execute("""
+        SELECT
+            COUNT(*)                                              AS total_jds,
+            COALESCE(ROUND(AVG(overall_score)::numeric, 1), 0)    AS avg_jd_score,
+            COUNT(*) FILTER (WHERE overall_score >= 80)           AS excellent_jds,
+            COUNT(*) FILTER (WHERE overall_score < 50)            AS weak_jds,
+            COUNT(*) FILTER (WHERE overall_score < 40)            AS jb0,
+            COUNT(*) FILTER (WHERE overall_score >= 40 AND overall_score < 60) AS jb1,
+            COUNT(*) FILTER (WHERE overall_score >= 60 AND overall_score < 80) AS jb2,
+            COUNT(*) FILTER (WHERE overall_score >= 80)           AS jb3
+        FROM jd_analyses
+    """)
+    jagg = fetchone_dict(cur)
+
+    # Improved-JD count (how many analyses were turned into a fixed JD)
+    cur.execute("SELECT COUNT(DISTINCT analysis_id) FROM jd_fixes")
+    jds_improved = cur.fetchone()[0] or 0
+
+    total_jds = jagg["total_jds"] or 0
+    jd_stats = {
+        "total_jds": total_jds,
+        "avg_jd_score": float(jagg["avg_jd_score"]) if total_jds else 0,
+        "excellent_jds": jagg["excellent_jds"] or 0,
+        "weak_jds": jagg["weak_jds"] or 0,
+        "jds_improved": jds_improved,
+    }
+    jd_buckets = {"0-39": jagg["jb0"], "40-59": jagg["jb1"], "60-79": jagg["jb2"], "80-100": jagg["jb3"]}
+
+    cur.execute(
+        "SELECT id, jd_filename, detected_role, overall_score, seniority_level, created_at "
+        "FROM jd_analyses ORDER BY created_at DESC LIMIT 5"
+    )
+    recent_jds = fetchall_dict(cur)
     cur.close()
 
     return render_template(
@@ -618,6 +653,7 @@ def dashboard():
         shortlisted=shortlisted, avg_score=avg_score,
         buckets=buckets, grade_counts=grade_counts,
         top_candidates=top_candidates, recent_scans=recent_scans,
+        jd_stats=jd_stats, jd_buckets=jd_buckets, recent_jds=recent_jds,
     )
 
 
