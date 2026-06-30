@@ -6,8 +6,13 @@
   <div>
     <div class="eyebrow">Overview</div>
     <h1>Recruiter Dashboard</h1>
-    <p class="lede">Aggregate hiring funnel across every bulk scan you've run.</p>
+    <p class="lede">Full overview across resume screening and JD analysis activity.</p>
   </div>
+</div>
+
+<div class="section-head" style="display:flex;align-items:center;gap:10px;margin:6px 0 16px;">
+  <span style="font-size:18px;">⚡</span>
+  <h2 style="font-size:18px;font-weight:800;margin:0;">Resume Screening</h2>
 </div>
 
 <div class="kpi-grid">
@@ -72,6 +77,51 @@
       {% endfor %}
     </div>
     {% else %}<p class="muted">No scans yet.</p>{% endif %}
+  </div>
+</div>
+
+{# ══════════════════════════════════════════════════════════
+   JD ANALYSIS OVERVIEW
+══════════════════════════════════════════════════════════ #}
+<div class="section-head" style="display:flex;align-items:center;gap:10px;margin:34px 0 16px;padding-top:22px;border-top:1px solid var(--border);">
+  <span style="font-size:18px;">🔬</span>
+  <h2 style="font-size:18px;font-weight:800;margin:0;">JD Analysis</h2>
+</div>
+
+<div class="kpi-grid">
+  <div class="kpi card"><div class="kpi-ico b1">🔬</div><div><div class="kpi-label">JDs Analysed</div><div class="kpi-val">{{ jd_stats['total_jds'] }}</div></div></div>
+  <div class="kpi card"><div class="kpi-ico b3">📊</div><div><div class="kpi-label">Avg JD Quality</div><div class="kpi-val">{{ jd_stats['avg_jd_score'] }}%</div></div></div>
+  <div class="kpi card"><div class="kpi-ico b2">🏆</div><div><div class="kpi-label">Excellent JDs</div><div class="kpi-val">{{ jd_stats['excellent_jds'] }}</div></div></div>
+  <div class="kpi card"><div class="kpi-ico b4">✨</div><div><div class="kpi-label">JDs Improved</div><div class="kpi-val">{{ jd_stats['jds_improved'] }}</div></div></div>
+</div>
+
+<div class="grid-2">
+  <div class="card">
+    <div class="card-title">JD Quality Distribution</div>
+    {% set jmaxv = [jd_buckets['0-39'], jd_buckets['40-59'], jd_buckets['60-79'], jd_buckets['80-100'], 1]|max %}
+    {% for label, color in [('0-39','low'),('40-59','mid'),('60-79','blue'),('80-100','high')] %}
+    <div class="bd-row">
+      <div class="bd-label">{{ label }}</div>
+      <div class="bd-bar"><div class="bd-fill {{ color }}" style="width:{{ (jd_buckets[label]/jmaxv)*100 }}%"></div></div>
+      <div class="bd-val">{{ jd_buckets[label] }}</div>
+    </div>
+    {% endfor %}
+    {% if jd_stats['total_jds'] == 0 %}<p class="muted" style="margin-top:8px;">Analyse a JD to populate this.</p>{% endif %}
+  </div>
+
+  <div class="card">
+    <div class="card-title">Recently Analysed JDs</div>
+    {% if recent_jds %}
+    <div class="top-list">
+      {% for j in recent_jds %}
+      <a class="top-row" href="{{ url_for('jd_analysis_result', analysis_id=j['id']) }}">
+        <div class="top-rank rsq">JD</div>
+        <div class="top-name"><strong>{{ j['detected_role'] or j['jd_filename'] }}</strong><span class="muted">{{ j['seniority_level'] or '—' }} · {{ j['created_at'][:10] }}</span></div>
+        <div class="score-orb sm {{ 'high' if j['overall_score']>=70 else ('mid' if j['overall_score']>=45 else 'low') }}">{{ j['overall_score'] }}</div>
+      </a>
+      {% endfor %}
+    </div>
+    {% else %}<p class="muted">No JD analyses yet. <a href="{{ url_for('jd_analysis') }}" style="color:var(--blue);font-weight:600;">Analyse one →</a></p>{% endif %}
   </div>
 </div>
 {% endblock %}
