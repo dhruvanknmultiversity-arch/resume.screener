@@ -125,38 +125,118 @@ zipInput.addEventListener('change', e => {
   document.getElementById('zip-chip').textContent = f ? '🗂️ ' + f.name : '';
 });
 
-// Client-side validation before submit — avoids a server round-trip on obvious mistakes
-document.getElementById('screen-form').addEventListener('submit', e => {
-  const msg = document.getElementById('form-msg');
-  const jd = document.getElementById('jd-file').files.length;
-  const mode = modeInput.value;
-  const resumeCount = mode === 'zip' ? zipInput.files.length : filesInput.files.length;
+// ── Progress ring helpers ──
+const RING_CIRC = 326.7;  // 2π·52
+function setRing(pct) {
+  document.getElementById('progress-pct').textContent = Math.round(pct) + '%';
+  document.getElementById('ring-fill').style.strokeDashoffset = RING_CIRC * (1 - pct / 100);
+}
+function setStage(txt) { document.getElementById('progress-stage').textContent = txt; }
 
-  let err = '';
-  if (!jd) err = 'Please upload a job description file.';
-  else if (!resumeCount) err = mode === 'zip'
-      ? 'Please add a ZIP of resumes.'
-      : 'Please add at least one resume file.';
+// How many resumes to send per request. Small batches stay under Vercel's
+// 4.5 MB payload cap and 60 s function timeout no matter the total count.
+const BATCH_SIZE = 4;
 
-  if (err) {
-    e.preventDefault();
-    msg.textContent = '⚠ ' + err;
+async function runBatchedScan(jdFile, resumeFiles) {
+  const overlay = document.getElementById('loading-overlay');
+  overlay.classList.remove('hidden');
+  document.getElementById('run-btn').disabled = true;
+
+  const total = resumeFiles.length;
+  let scanId = null;
+  setRing(1); setStage('Reading job description…');
+
+  try {
+    // 1) Start the scan with the JD only
+    const startFd = new FormData();
+    startFd.append('jd_file', jdFile);
+    const startRes = await fetch("{{ url_for('scan_start') }}", { method: 'POST', body: startFd });
+    if (!startRes.ok) throw new Error((await startRes.json()).error || 'Could not start scan.');
+    scanId = (await startRes.json()).scan_id;
+
+    // 2) Upload resumes in small batches, updating real progress
+    let done = 0;
+    for (let i = 0; i < total; i += BATCH_SIZE) {
+      const slice = resumeFiles.slice(i, i + BATCH_SIZE);
+      const fd = new FormData();
+      slice.forEach(f => fd.append('resume_files', f));
+      setStage(`Screening resume ${done + 1}–${Math.min(done + slice.length, total)} of ${total}…`);
+
+      const res = await fetch(`/scan/${scanId}/batch`, { method: 'POST', body: fd });
+      if (!res.ok) throw new Error((await res.json()).error || 'A batch failed.');
+
+      done += slice.length;
+      // reserve last 5% for finalisation
+      setRing(Math.min(95, (done / total) * 95));
+    }
+
+    // 3) Finalise
+    setStage('Ranking candidates…');
+    const finRes = await fetch(`/scan/${scanId}/finalize`, { method: 'POST' });
+    const finData = await finRes.json();
+    if (!finRes.ok) throw new Error(finData.error || 'Could not finalise scan.');
+    setRing(100); setStage('Done — loading results…');
+    window.location = finData.redirect;
+  } catch (err) {
+    // Clean up a half-finished scan, then surface the error
+    if (scanId) { try { await fetch(`/scan/${scanId}/cancel`, { method: 'POST' }); } catch (_) {} }
+    overlay.classList.add('hidden');
+    document.getElementById('run-btn').disabled = false;
+    const msg = document.getElementById('form-msg');
+    msg.textContent = '⚠ ' + err.message;
     msg.classList.remove('hidden');
+  }
+}
+
+document.getElementById('screen-form').addEventListener('submit', e => {
+  e.preventDefault();
+  const msg = document.getElementById('form-msg');
+  msg.classList.add('hidden');
+  const jdFiles = document.getElementById('jd-file').files;
+  const mode = modeInput.value;
+
+  if (!jdFiles.length) {
+    msg.textContent = '⚠ Please upload a job description file.';
+    msg.classList.remove('hidden'); return;
+  }
+
+  if (mode === 'zip') {
+    // ZIP: one file, handled by the classic server route (form submit)
+    if (!zipInput.files.length) {
+      msg.textContent = '⚠ Please add a ZIP of resumes.';
+      msg.classList.remove('hidden'); return;
+    }
+    document.getElementById('loading-overlay').classList.remove('hidden');
+    document.getElementById('run-btn').disabled = true;
+    setStage('Extracting & screening ZIP…');
+    e.target.submit();  // native submit to /scan
     return;
   }
-  // valid → show full-page loading overlay while server processes
-  document.getElementById('loading-overlay').classList.remove('hidden');
-  document.getElementById('run-btn').disabled = true;
+
+  // Files: batched client-driven upload
+  const files = Array.from(filesInput.files);
+  if (!files.length) {
+    msg.textContent = '⚠ Please add at least one resume file.';
+    msg.classList.remove('hidden'); return;
+  }
+  runBatchedScan(jdFiles[0], files);
 });
 </script>
 
-{# Full-page loading overlay — shown while /scan processes synchronously #}
+{# Full-page loading overlay — single ring with real progress #}
 <div class="loading-overlay hidden" id="loading-overlay">
   <div class="loading-box">
-    <div class="loading-spinner"></div>
-    <h2>Screening Resumes…</h2>
-    <p class="lede" id="loading-msg">Screen Genie Engine is reading every resume and scoring it against your JD.</p>
-    <div class="loading-bar-wrap"><div class="loading-bar-fill" id="loading-bar"></div></div>
+    <div class="progress-ring">
+      <svg width="120" height="120" viewBox="0 0 120 120">
+        <circle cx="60" cy="60" r="52" stroke="#2d2f45" stroke-width="9" fill="none"/>
+        <circle id="ring-fill" cx="60" cy="60" r="52" stroke="#6C63FF" stroke-width="9" fill="none"
+          stroke-linecap="round" stroke-dasharray="326.7" stroke-dashoffset="326.7"
+          transform="rotate(-90 60 60)"/>
+      </svg>
+      <div class="progress-pct" id="progress-pct">0%</div>
+    </div>
+    <h2 style="margin-top:8px;">Screening Resumes…</h2>
+    <p class="muted" id="progress-stage" style="font-size:.9rem;margin-top:8px;color:#9b9bb5;">Starting…</p>
     <p class="muted" style="font-size:.8rem;margin-top:16px">Please keep this tab open. You'll be taken to results automatically.</p>
   </div>
 </div>
@@ -168,27 +248,14 @@ document.getElementById('screen-form').addEventListener('submit', e => {
 }
 .loading-overlay.hidden { display: none; }
 .loading-box {
-  text-align: center; max-width: 480px; padding: 48px 40px;
+  text-align: center; max-width: 480px; padding: 44px 40px;
   background: #1a1d2e; border-radius: 20px; border: 1px solid #2d2f45;
 }
-.loading-spinner {
-  width: 56px; height: 56px; border: 4px solid #2d2f45;
-  border-top-color: #6C63FF; border-radius: 50%;
-  animation: spin 1s linear infinite; margin: 0 auto 24px;
-}
-@keyframes spin { to { transform: rotate(360deg); } }
-.loading-bar-wrap {
-  background: #2d2f45; border-radius: 8px; height: 8px;
-  overflow: hidden; margin-top: 20px;
-}
-.loading-bar-fill {
-  height: 8px; background: #6C63FF; border-radius: 8px;
-  animation: indeterminate 1.8s ease-in-out infinite;
-}
-@keyframes indeterminate {
-  0%   { width: 0%;   margin-left: 0%; }
-  50%  { width: 60%;  margin-left: 20%; }
-  100% { width: 0%;   margin-left: 100%; }
+.progress-ring { position: relative; width: 120px; height: 120px; margin: 0 auto 8px; }
+#ring-fill { transition: stroke-dashoffset .4s ease; }
+.progress-pct {
+  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+  font-size: 28px; font-weight: 800; color: #fff;
 }
 </style>
 {% endblock %}
