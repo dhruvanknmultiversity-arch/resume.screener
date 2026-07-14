@@ -22,10 +22,10 @@
     <div class="card upload">
       <div class="card-head">
         <div class="card-title">① Job Description</div>
-        <div class="card-sub">PDF · DOCX · TXT</div>
+        <div class="card-sub">PDF · DOC · DOCX · TXT</div>
       </div>
       <label class="drop" id="jd-drop">
-        <input type="file" name="jd_file" id="jd-file" accept=".pdf,.docx,.txt" required>
+        <input type="file" name="jd_file" id="jd-file" accept=".pdf,.doc,.docx,.txt,.rtf" required>
         <div class="drop-ico">📄</div>
         <div class="drop-title">Drop the JD here</div>
         <div class="drop-sub">or click to browse</div>
@@ -45,10 +45,10 @@
       <input type="hidden" name="resume_mode" id="resume_mode" value="files">
 
       <label class="drop" id="files-drop">
-        <input type="file" name="resume_files" id="resume-files" accept=".pdf,.docx,.txt" multiple>
+        <input type="file" name="resume_files" id="resume-files" accept=".pdf,.doc,.docx,.txt,.rtf" multiple>
         <div class="drop-ico">📎</div>
         <div class="drop-title">Drop multiple resumes</div>
-        <div class="drop-sub">PDF / DOCX / TXT · up to 200</div>
+        <div class="drop-sub">PDF / DOC / DOCX / TXT · max 50 at a time</div>
         <div class="drop-list" id="files-list"></div>
       </label>
 
@@ -56,9 +56,21 @@
         <input type="file" name="resume_zip" id="resume-zip" accept=".zip">
         <div class="drop-ico">🗂️</div>
         <div class="drop-title">Drop a ZIP of resumes</div>
-        <div class="drop-sub">Folder of PDF / DOCX / TXT files</div>
+        <div class="drop-sub">Folder of PDF / DOC / DOCX / TXT files</div>
         <div class="drop-chip" id="zip-chip"></div>
       </label>
+
+      {# Capacity + timing note #}
+      <div id="capacity-note" style="margin-top:14px; display:flex; align-items:flex-start; gap:8px;
+           background:#f0f0ff; border:1px solid #d9d9f5; border-radius:10px; padding:10px 12px;">
+        <span style="font-size:15px; line-height:1.2;">⚡</span>
+        <div style="font-size:12px; color:#4b4b6a; line-height:1.5;">
+          <strong>Upload up to 50 resumes per batch.</strong>
+          Screen Genie Engine processes them in parallel — roughly
+          <strong id="cap-eta">~10–20 sec each</strong>.
+          <span id="cap-live" style="color:#6C63FF; font-weight:600;"></span>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -107,17 +119,43 @@ document.getElementById('jd-file').addEventListener('change', e => {
   const f = e.target.files[0];
   document.getElementById('jd-chip').textContent = f ? '📄 ' + f.name : '';
 });
+const MAX_RESUMES = 50;
+
+// Rough time estimate: resumes run in parallel chunks; ~15s per chunk.
+function estimateMinutes(n) {
+  const chunks = Math.ceil(n / BATCH_SIZE);
+  const secs = chunks * 15 + 5;              // ~15s/chunk + finalise
+  if (secs < 60) return `about ${secs} sec`;
+  const m = Math.round(secs / 60);
+  return `about ${m} min${m > 1 ? 's' : ''}`;
+}
+
 filesInput.addEventListener('change', e => {
   const list = document.getElementById('files-list');
+  const live = document.getElementById('cap-live');
+  const msg = document.getElementById('form-msg');
   list.innerHTML = '';
+  const count = e.target.files.length;
+
   Array.from(e.target.files).slice(0, 50).forEach(f => {
     const d = document.createElement('div'); d.className='file-pill'; d.textContent = f.name;
     list.appendChild(d);
   });
-  if (e.target.files.length > 50) {
+  if (count > 50) {
     const d = document.createElement('div'); d.className='file-pill more';
-    d.textContent = '+' + (e.target.files.length - 50) + ' more';
+    d.textContent = '+' + (count - 50) + ' more';
     list.appendChild(d);
+  }
+
+  if (count > MAX_RESUMES) {
+    msg.textContent = `⚠ You selected ${count} resumes. Please upload a maximum of ${MAX_RESUMES} at a time.`;
+    msg.classList.remove('hidden');
+    live.textContent = '';
+  } else if (count > 0) {
+    msg.classList.add('hidden');
+    live.textContent = `${count} selected · est. ${estimateMinutes(count)}.`;
+  } else {
+    live.textContent = '';
   }
 });
 zipInput.addEventListener('change', e => {
@@ -135,7 +173,12 @@ function setStage(txt) { document.getElementById('progress-stage').textContent =
 
 // How many resumes to send per request. Small batches stay under Vercel's
 // 4.5 MB payload cap and 60 s function timeout no matter the total count.
-const BATCH_SIZE = 4;
+const BATCH_SIZE = 5;
+
+function setEta(txt) {
+  const el = document.getElementById('progress-eta');
+  if (el) el.textContent = txt;
+}
 
 async function runBatchedScan(jdFile, resumeFiles) {
   const overlay = document.getElementById('loading-overlay');
@@ -144,7 +187,9 @@ async function runBatchedScan(jdFile, resumeFiles) {
 
   const total = resumeFiles.length;
   let scanId = null;
+  const startedAt = Date.now();
   setRing(1); setStage('Reading job description…');
+  setEta(`Estimated time: ${estimateMinutes(total)}`);
 
   try {
     // 1) Start the scan with the JD only
@@ -168,6 +213,14 @@ async function runBatchedScan(jdFile, resumeFiles) {
       done += slice.length;
       // reserve last 5% for finalisation
       setRing(Math.min(95, (done / total) * 95));
+
+      // Live remaining-time estimate from actual pace
+      const elapsed = (Date.now() - startedAt) / 1000;
+      const perResume = elapsed / done;
+      const remaining = Math.max(0, Math.round(perResume * (total - done)));
+      setEta(done < total
+        ? `~${remaining < 60 ? remaining + ' sec' : Math.round(remaining / 60) + ' min'} remaining`
+        : 'Almost done…');
     }
 
     // 3) Finalise
@@ -219,6 +272,10 @@ document.getElementById('screen-form').addEventListener('submit', e => {
     msg.textContent = '⚠ Please add at least one resume file.';
     msg.classList.remove('hidden'); return;
   }
+  if (files.length > MAX_RESUMES) {
+    msg.textContent = `⚠ Please upload a maximum of ${MAX_RESUMES} resumes at a time (you selected ${files.length}).`;
+    msg.classList.remove('hidden'); return;
+  }
   runBatchedScan(jdFiles[0], files);
 });
 </script>
@@ -237,6 +294,7 @@ document.getElementById('screen-form').addEventListener('submit', e => {
     </div>
     <h2 style="margin-top:8px;">Screening Resumes…</h2>
     <p class="muted" id="progress-stage" style="font-size:.9rem;margin-top:8px;color:#9b9bb5;">Starting…</p>
+    <p id="progress-eta" style="font-size:.85rem;margin-top:6px;color:#6C63FF;font-weight:600;">Estimating time…</p>
     <p class="muted" style="font-size:.8rem;margin-top:16px">Please keep this tab open. You'll be taken to results automatically.</p>
   </div>
 </div>
