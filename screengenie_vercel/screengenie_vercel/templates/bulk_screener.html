@@ -75,7 +75,10 @@
   </div>
 
   <div class="form-msg hidden" id="form-msg"></div>
-  <button type="submit" class="primary-btn" id="run-btn">⚡ Screen Resumes</button>
+  {# type="button" — NEVER a native submit, so the browser can never POST all
+     files to /scan in one shot (which caused the 413). All uploads go through
+     the batched JavaScript below. #}
+  <button type="button" class="primary-btn" id="run-btn">⚡ Screen Resumes</button>
 </form>
 
 <div class="info-row">
@@ -241,8 +244,35 @@ async function runBatchedScan(jdFile, resumeFiles) {
   }
 }
 
-document.getElementById('screen-form').addEventListener('submit', e => {
-  e.preventDefault();
+// Vercel rejects any single request over ~4.5 MB. We guard well under that.
+const MAX_ZIP_BYTES = 4 * 1024 * 1024;   // 4 MB safety margin for ZIP mode
+
+async function uploadZip(jdFile, zipFile) {
+  const overlay = document.getElementById('loading-overlay');
+  overlay.classList.remove('hidden');
+  document.getElementById('run-btn').disabled = true;
+  setRing(30); setStage('Extracting & screening ZIP…'); setEta('Processing…');
+  try {
+    const fd = new FormData();
+    fd.append('jd_file', jdFile);
+    fd.append('resume_zip', zipFile);
+    const res = await fetch("{{ url_for('scan') }}", { method: 'POST', body: fd });
+    if (res.status === 413) throw new Error('ZIP is too large for one upload. Use the Files tab instead (up to 50 resumes).');
+    if (!res.ok) throw new Error('Scan failed. Please try again or use the Files tab.');
+    setRing(100); setStage('Done — loading results…');
+    window.location = res.url;   // server redirected to /results/<id>
+  } catch (err) {
+    overlay.classList.add('hidden');
+    document.getElementById('run-btn').disabled = false;
+    const msg = document.getElementById('form-msg');
+    msg.textContent = '⚠ ' + err.message;
+    msg.classList.remove('hidden');
+  }
+}
+
+// The button is type="button" — this click handler is the ONLY way to submit,
+// so the browser can never natively POST a large payload to /scan.
+document.getElementById('run-btn').addEventListener('click', () => {
   const msg = document.getElementById('form-msg');
   msg.classList.add('hidden');
   const jdFiles = document.getElementById('jd-file').files;
@@ -254,19 +284,19 @@ document.getElementById('screen-form').addEventListener('submit', e => {
   }
 
   if (mode === 'zip') {
-    // ZIP: one file, handled by the classic server route (form submit)
     if (!zipInput.files.length) {
       msg.textContent = '⚠ Please add a ZIP of resumes.';
       msg.classList.remove('hidden'); return;
     }
-    document.getElementById('loading-overlay').classList.remove('hidden');
-    document.getElementById('run-btn').disabled = true;
-    setStage('Extracting & screening ZIP…');
-    e.target.submit();  // native submit to /scan
+    if (zipInput.files[0].size > MAX_ZIP_BYTES) {
+      msg.textContent = '⚠ This ZIP is over 4 MB and can’t be uploaded in one request. Please switch to the Files tab and select up to 50 resumes there.';
+      msg.classList.remove('hidden'); return;
+    }
+    uploadZip(jdFiles[0], zipInput.files[0]);
     return;
   }
 
-  // Files: batched client-driven upload
+  // Files mode — batched upload
   const files = Array.from(filesInput.files);
   if (!files.length) {
     msg.textContent = '⚠ Please add at least one resume file.';
