@@ -129,7 +129,7 @@ const MAX_RESUMES = 50;
 
 // Rough time estimate: resumes run in parallel chunks; ~15s per chunk.
 function estimateMinutes(n) {
-  const chunks = Math.ceil(n / BATCH_SIZE);
+  const chunks = Math.ceil(n / 5);
   const secs = chunks * 15 + 5;              // ~15s/chunk + finalise
   if (secs < 60) return `about ${secs} sec`;
   const m = Math.round(secs / 60);
