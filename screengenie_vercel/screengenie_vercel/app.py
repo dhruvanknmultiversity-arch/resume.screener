@@ -326,10 +326,13 @@ def scan_start():
 def scan_batch(scan_id):
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT jd_text, keywords FROM scans WHERE id = %s", (scan_id,))
+    cur.execute("SELECT jd_text, keywords, resume_count FROM scans WHERE id = %s", (scan_id,))
     row = fetchone_dict(cur)
     if not row or not row["jd_text"]:
         return jsonify({"error": "Scan not found."}), 404
+    # Defensive cap — max 50 resumes per scan even if the client is bypassed
+    if (row["resume_count"] or 0) >= 50:
+        return jsonify({"processed": 0, "skipped": 0, "capped": True})
     jd_text = row["jd_text"]
     keywords = json.loads(row["keywords"])
 
