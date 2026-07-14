@@ -2,6 +2,9 @@
 {% set active = 'bulk' %}
 {% block title %}Bulk Screener{% endblock %}
 {% block content %}
+{# JSZip — used to unzip resume ZIPs in the browser so a big ZIP is streamed
+   to the server in small batches instead of one over-limit request. #}
+<script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <div class="page-head">
   <div>
     <div class="eyebrow">P&amp;C Toolkit</div>
@@ -56,7 +59,7 @@
         <input type="file" name="resume_zip" id="resume-zip" accept=".zip">
         <div class="drop-ico">🗂️</div>
         <div class="drop-title">Drop a ZIP of resumes</div>
-        <div class="drop-sub">Folder of PDF / DOC / DOCX / TXT files</div>
+        <div class="drop-sub">Auto-unzipped in your browser · up to 50 · big ZIPs OK</div>
         <div class="drop-chip" id="zip-chip"></div>
       </label>
 
@@ -173,105 +176,131 @@ function setRing(pct) {
   document.getElementById('ring-fill').style.strokeDashoffset = RING_CIRC * (1 - pct / 100);
 }
 function setStage(txt) { document.getElementById('progress-stage').textContent = txt; }
+function setEta(txt) { const el = document.getElementById('progress-eta'); if (el) el.textContent = txt; }
 
-// How many resumes to send per request. Small batches stay under Vercel's
-// 4.5 MB payload cap and 60 s function timeout no matter the total count.
-const BATCH_SIZE = 5;
-
-function setEta(txt) {
-  const el = document.getElementById('progress-eta');
-  if (el) el.textContent = txt;
+// Parse a response body as JSON without ever throwing (Vercel error pages are
+// plain text/HTML, not JSON — reading them with res.json() was the crash).
+async function readJson(res) {
+  try { return await res.clone().json(); } catch (_) { return {}; }
+}
+function httpMsg(res, fallback) {
+  if (res.status === 413) return 'That upload was too large for the server. Very large PDFs are skipped automatically — please retry.';
+  if (res.status === 404) return 'Server route not found — make sure the latest app.py is deployed.';
+  if (res.status >= 500) return 'The server hit an error. Please try again.';
+  return fallback;
 }
 
-async function runBatchedScan(jdFile, resumeFiles) {
+// ── Vercel limits & batching ──
+const PER_FILE_MAX   = 4.0 * 1024 * 1024;   // a single file bigger than this can't fit one request
+const BATCH_MAX_BYTES = 3.6 * 1024 * 1024;  // keep each request well under the 4.5 MB cap
+const BATCH_MAX_COUNT = 5;                  // and never more than 5 resumes per request
+const SUPPORTED = /\.(pdf|docx?|txt|rtf)$/i;
+
+// Collect resumes from either the file picker or a ZIP (unzipped in-browser).
+// Returns [{name, blob, size}].
+async function collectResumes(mode) {
+  const items = [];
+  if (mode === 'zip') {
+    if (typeof JSZip === 'undefined') throw new Error('ZIP support failed to load. Please refresh and try again.');
+    const zip = await JSZip.loadAsync(zipInput.files[0]);
+    const entries = Object.values(zip.files).filter(e => !e.dir);
+    for (const e of entries) {
+      const base = e.name.split('/').pop();
+      if (!base || base.startsWith('.') || base.startsWith('__')) continue;
+      if (!SUPPORTED.test(base)) continue;
+      const blob = await e.async('blob');
+      items.push({ name: base, blob, size: blob.size });
+    }
+  } else {
+    for (const f of Array.from(filesInput.files)) {
+      if (SUPPORTED.test(f.name)) items.push({ name: f.name, blob: f, size: f.size });
+    }
+  }
+  return items;
+}
+
+// Pack files into size-aware batches; skip any single file too big for one request.
+function planBatches(items) {
+  const skipped = [], usable = [];
+  for (const it of items) (it.size > PER_FILE_MAX ? skipped : usable).push(it);
+  const batches = [];
+  let cur = [], bytes = 0;
+  for (const it of usable) {
+    if (cur.length && (bytes + it.size > BATCH_MAX_BYTES || cur.length >= BATCH_MAX_COUNT)) {
+      batches.push(cur); cur = []; bytes = 0;
+    }
+    cur.push(it); bytes += it.size;
+  }
+  if (cur.length) batches.push(cur);
+  return { batches, skipped, usableCount: usable.length };
+}
+
+async function runScan(jdFile, mode) {
   const overlay = document.getElementById('loading-overlay');
+  const msg = document.getElementById('form-msg');
   overlay.classList.remove('hidden');
   document.getElementById('run-btn').disabled = true;
+  setRing(1); setStage(mode === 'zip' ? 'Unzipping resumes…' : 'Reading files…'); setEta('Preparing…');
 
-  const total = resumeFiles.length;
   let scanId = null;
   const startedAt = Date.now();
-  setRing(1); setStage('Reading job description…');
-  setEta(`Estimated time: ${estimateMinutes(total)}`);
-
   try {
-    // 1) Start the scan with the JD only
+    const items = await collectResumes(mode);
+    const { batches, skipped, usableCount } = planBatches(items);
+
+    if (usableCount === 0) throw new Error('No usable resumes found (PDF / DOC / DOCX / TXT under 4 MB each).');
+    if (usableCount > MAX_RESUMES) throw new Error(`Found ${usableCount} resumes. Please keep it to ${MAX_RESUMES} at a time.`);
+
+    const total = usableCount;
+    setEta(`Estimated time: ${estimateMinutes(total)}`);
+
+    // 1) start scan with JD
     const startFd = new FormData();
     startFd.append('jd_file', jdFile);
     const startRes = await fetch("{{ url_for('scan_start') }}", { method: 'POST', body: startFd });
-    if (!startRes.ok) throw new Error((await startRes.json()).error || 'Could not start scan.');
-    scanId = (await startRes.json()).scan_id;
+    const startData = await readJson(startRes);
+    if (!startRes.ok) throw new Error(startData.error || httpMsg(startRes, 'Could not start scan.'));
+    scanId = startData.scan_id;
 
-    // 2) Upload resumes in small batches, updating real progress
+    // 2) upload size-aware batches
     let done = 0;
-    for (let i = 0; i < total; i += BATCH_SIZE) {
-      const slice = resumeFiles.slice(i, i + BATCH_SIZE);
+    for (const batch of batches) {
       const fd = new FormData();
-      slice.forEach(f => fd.append('resume_files', f));
-      setStage(`Screening resume ${done + 1}–${Math.min(done + slice.length, total)} of ${total}…`);
-
+      batch.forEach(it => fd.append('resume_files', it.blob, it.name));
+      setStage(`Screening resume ${done + 1}–${done + batch.length} of ${total}…`);
       const res = await fetch(`/scan/${scanId}/batch`, { method: 'POST', body: fd });
-      if (!res.ok) throw new Error((await res.json()).error || 'A batch failed.');
-
-      done += slice.length;
-      // reserve last 5% for finalisation
+      if (!res.ok) {
+        const d = await readJson(res);
+        throw new Error(d.error || httpMsg(res, 'A batch failed.'));
+      }
+      done += batch.length;
       setRing(Math.min(95, (done / total) * 95));
-
-      // Live remaining-time estimate from actual pace
       const elapsed = (Date.now() - startedAt) / 1000;
-      const perResume = elapsed / done;
-      const remaining = Math.max(0, Math.round(perResume * (total - done)));
+      const remaining = Math.max(0, Math.round((elapsed / done) * (total - done)));
       setEta(done < total
         ? `~${remaining < 60 ? remaining + ' sec' : Math.round(remaining / 60) + ' min'} remaining`
         : 'Almost done…');
     }
 
-    // 3) Finalise
+    // 3) finalise
     setStage('Ranking candidates…');
     const finRes = await fetch(`/scan/${scanId}/finalize`, { method: 'POST' });
-    const finData = await finRes.json();
-    if (!finRes.ok) throw new Error(finData.error || 'Could not finalise scan.');
-    setRing(100); setStage('Done — loading results…');
+    const finData = await readJson(finRes);
+    if (!finRes.ok) throw new Error(finData.error || httpMsg(finRes, 'Could not finalise scan.'));
+    setRing(100);
+    setStage(skipped.length ? `Done — ${skipped.length} oversized file(s) skipped. Loading results…` : 'Done — loading results…');
     window.location = finData.redirect;
   } catch (err) {
-    // Clean up a half-finished scan, then surface the error
     if (scanId) { try { await fetch(`/scan/${scanId}/cancel`, { method: 'POST' }); } catch (_) {} }
     overlay.classList.add('hidden');
     document.getElementById('run-btn').disabled = false;
-    const msg = document.getElementById('form-msg');
     msg.textContent = '⚠ ' + err.message;
     msg.classList.remove('hidden');
   }
 }
 
-// Vercel rejects any single request over ~4.5 MB. We guard well under that.
-const MAX_ZIP_BYTES = 4 * 1024 * 1024;   // 4 MB safety margin for ZIP mode
-
-async function uploadZip(jdFile, zipFile) {
-  const overlay = document.getElementById('loading-overlay');
-  overlay.classList.remove('hidden');
-  document.getElementById('run-btn').disabled = true;
-  setRing(30); setStage('Extracting & screening ZIP…'); setEta('Processing…');
-  try {
-    const fd = new FormData();
-    fd.append('jd_file', jdFile);
-    fd.append('resume_zip', zipFile);
-    const res = await fetch("{{ url_for('scan') }}", { method: 'POST', body: fd });
-    if (res.status === 413) throw new Error('ZIP is too large for one upload. Use the Files tab instead (up to 50 resumes).');
-    if (!res.ok) throw new Error('Scan failed. Please try again or use the Files tab.');
-    setRing(100); setStage('Done — loading results…');
-    window.location = res.url;   // server redirected to /results/<id>
-  } catch (err) {
-    overlay.classList.add('hidden');
-    document.getElementById('run-btn').disabled = false;
-    const msg = document.getElementById('form-msg');
-    msg.textContent = '⚠ ' + err.message;
-    msg.classList.remove('hidden');
-  }
-}
-
-// The button is type="button" — this click handler is the ONLY way to submit,
-// so the browser can never natively POST a large payload to /scan.
+// Button is type="button" — this is the ONLY submit path, so the browser can
+// never natively POST a large payload. Both Files and ZIP go through batching.
 document.getElementById('run-btn').addEventListener('click', () => {
   const msg = document.getElementById('form-msg');
   msg.classList.add('hidden');
@@ -282,31 +311,15 @@ document.getElementById('run-btn').addEventListener('click', () => {
     msg.textContent = '⚠ Please upload a job description file.';
     msg.classList.remove('hidden'); return;
   }
-
-  if (mode === 'zip') {
-    if (!zipInput.files.length) {
-      msg.textContent = '⚠ Please add a ZIP of resumes.';
-      msg.classList.remove('hidden'); return;
-    }
-    if (zipInput.files[0].size > MAX_ZIP_BYTES) {
-      msg.textContent = '⚠ This ZIP is over 4 MB and can’t be uploaded in one request. Please switch to the Files tab and select up to 50 resumes there.';
-      msg.classList.remove('hidden'); return;
-    }
-    uploadZip(jdFiles[0], zipInput.files[0]);
-    return;
+  if (mode === 'zip' && !zipInput.files.length) {
+    msg.textContent = '⚠ Please add a ZIP of resumes.';
+    msg.classList.remove('hidden'); return;
   }
-
-  // Files mode — batched upload
-  const files = Array.from(filesInput.files);
-  if (!files.length) {
+  if (mode !== 'zip' && !filesInput.files.length) {
     msg.textContent = '⚠ Please add at least one resume file.';
     msg.classList.remove('hidden'); return;
   }
-  if (files.length > MAX_RESUMES) {
-    msg.textContent = `⚠ Please upload a maximum of ${MAX_RESUMES} resumes at a time (you selected ${files.length}).`;
-    msg.classList.remove('hidden'); return;
-  }
-  runBatchedScan(jdFiles[0], files);
+  runScan(jdFiles[0], mode);
 });
 </script>
 
