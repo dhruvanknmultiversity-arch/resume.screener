@@ -304,25 +304,123 @@ DATE_RANGE_RE = re.compile(
 # File extraction
 # ----------------------------------------------------------------------
 
-def extract_text_from_file(filename, fileobj):
-    """Extract plain text from a PDF / DOCX / TXT file-like object."""
-    name = filename.lower()
+def _docx_full_text(fileobj):
+    """Extract ALL text from a .docx — paragraphs, tables, headers & footers.
+    Many resumes/JDs lay everything out in tables, which the old paragraph-only
+    reader silently dropped."""
+    document = docx.Document(fileobj)
+    parts = []
+
+    # Body paragraphs
+    for p in document.paragraphs:
+        if p.text and p.text.strip():
+            parts.append(p.text)
+
+    # Tables (rows × cells) — walk every table, including nested paragraphs
+    def _read_tables(tables):
+        for table in tables:
+            for row in table.rows:
+                cells = [c.text.strip() for c in row.cells if c.text and c.text.strip()]
+                if cells:
+                    parts.append(" | ".join(cells))
+
+    _read_tables(document.tables)
+
+    # Headers / footers of each section
+    for section in document.sections:
+        for hdr in (section.header, section.footer):
+            if hdr is None:
+                continue
+            for p in hdr.paragraphs:
+                if p.text and p.text.strip():
+                    parts.append(p.text)
+
+    return "\n".join(parts)
+
+
+def _legacy_doc_text(data):
+    """Best-effort text scrape for old binary .doc (Word 97-2003) files, which
+    python-docx cannot open. Pulls the readable runs of text out of the binary."""
     try:
-        if name.endswith(".pdf"):
-            text = []
-            with pdfplumber.open(fileobj) as pdf:
-                for page in pdf.pages:
-                    page_text = page.extract_text() or ""
-                    text.append(page_text)
-            return "\n".join(text)
-        elif name.endswith(".docx"):
-            document = docx.Document(fileobj)
-            return "\n".join(p.text for p in document.paragraphs)
-        elif name.endswith(".txt"):
-            return fileobj.read().decode("utf-8", errors="ignore")
+        # .doc stores text mostly as latin-1/utf-16 runs; grab printable ASCII runs
+        raw = data.decode("latin-1", errors="ignore")
+        # keep sequences of printable chars (letters, digits, common punctuation)
+        runs = re.findall(r"[\x20-\x7E]{4,}", raw)
+        text = "\n".join(runs)
+        # strip Word binary noise tokens
+        text = re.sub(r"(HYPERLINK|MERGEFORMAT|\bMicrosoft\b.*?Document|Normal\.dotm?)", " ", text)
+        text = re.sub(r"[ \t]{2,}", " ", text)
+        return text.strip()
     except Exception:
         return ""
-    return ""
+
+
+def extract_text_from_file(filename, fileobj):
+    """Extract plain text from a PDF / DOCX / DOC / TXT / RTF file-like object.
+
+    Robust to Word files: reads paragraphs AND tables AND headers/footers, and
+    falls back gracefully for the old binary .doc format and misnamed files."""
+    name = (filename or "").lower()
+    # Read raw bytes once so we can retry with different parsers if needed
+    try:
+        data = fileobj.read()
+    except Exception:
+        data = b""
+    if not data:
+        return ""
+
+    def _from_pdf():
+        text = []
+        with pdfplumber.open(io.BytesIO(data)) as pdf:
+            for page in pdf.pages:
+                text.append(page.extract_text() or "")
+        return "\n".join(text)
+
+    def _from_docx():
+        return _docx_full_text(io.BytesIO(data))
+
+    try:
+        if name.endswith(".pdf"):
+            out = _from_pdf()
+            return out if out.strip() else ""
+
+        if name.endswith(".docx"):
+            return _from_docx()
+
+        if name.endswith(".doc"):
+            # Many ".doc" files are really .docx (or renamed) — try the modern
+            # parser first, then fall back to the binary scraper.
+            try:
+                out = _from_docx()
+                if out.strip():
+                    return out
+            except Exception:
+                pass
+            return _legacy_doc_text(data)
+
+        if name.endswith((".txt", ".rtf", ".md")):
+            txt = data.decode("utf-8", errors="ignore")
+            if name.endswith(".rtf"):
+                txt = re.sub(r"\\[a-z]+-?\d* ?", " ", txt)   # strip RTF control words
+                txt = re.sub(r"[{}]", " ", txt)
+            return txt
+
+        # Unknown extension — sniff the content (zip magic 'PK' → docx)
+        if data[:2] == b"PK":
+            try:
+                return _from_docx()
+            except Exception:
+                return ""
+        if data[:4] == b"%PDF":
+            return _from_pdf()
+        # last resort: treat as text
+        return data.decode("utf-8", errors="ignore")
+    except Exception:
+        # Any parser blew up — try a text decode so we never hard-fail
+        try:
+            return data.decode("utf-8", errors="ignore")
+        except Exception:
+            return ""
 
 
 def extract_resumes_from_zip(fileobj):
@@ -336,7 +434,7 @@ def extract_resumes_from_zip(fileobj):
             if base.startswith(".") or base.startswith("__"):
                 continue
             lower = base.lower()
-            if not (lower.endswith(".pdf") or lower.endswith(".docx") or lower.endswith(".txt")):
+            if not lower.endswith((".pdf", ".docx", ".doc", ".txt", ".rtf")):
                 continue
             with z.open(info) as f:
                 data = f.read()
