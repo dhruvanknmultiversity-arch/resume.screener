@@ -167,6 +167,11 @@ def init_db():
     # Columns added after v1 — safe to run repeatedly
     cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS duration_seconds REAL")
     cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS engine TEXT")
+    # Batched-upload support: JD text + keywords are stored on the scan so each
+    # resume batch (uploaded in a separate request) can reuse them.
+    cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS jd_text TEXT")
+    cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS status TEXT")
+    cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS claude_count INTEGER DEFAULT 0")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS jd_analyses (
             id SERIAL PRIMARY KEY,
@@ -230,43 +235,219 @@ def index():
 # to /results/<scan_id> automatically.
 # ---------------------------------------------------------------------------
 
-def run_scan_sync(jd_file_name, jd_text, jd_role, keywords, resume_docs):
-    """Run the full scan synchronously. Returns scan_id."""
+def process_resume_doc(jd_text, keywords, filename, text, raw):
+    """Score a single resume. Returns (candidate_dict, used_claude)."""
+    claude_result = analyze_resume_with_claude(jd_text, text, keywords)
+    used_claude = claude_result is not None
+    analysis = claude_result or analyze_resume(jd_text, text, keywords)
+    score = analysis["score"]
+    return {
+        "filename": filename,
+        "name": analysis["contact"]["name"],
+        "email": analysis["contact"]["email"],
+        "phone": analysis["contact"]["phone"],
+        "score": score,
+        "grade": grade_for_score(score),
+        "status": status_for_score(score),
+        "section_scores": analysis["section_scores"],
+        "matched_keywords": analysis["matched_keywords"],
+        "missing_keywords": analysis["missing_keywords"],
+        "matched_skills": analysis["matched_skills"],
+        "missing_skills": analysis["missing_skills"],
+        "extra_skills": analysis["extra_skills"],
+        "reasons": analysis["reasons"],
+        "suggestions": analysis.get("suggestions", []),
+        "passed_checks": analysis.get("passed_checks", []),
+        "warning_checks": analysis.get("warning_checks", []),
+        "issue_checks": analysis.get("issue_checks", []),
+        "semantic_score": analysis.get("semantic_score", 0),
+        "raw": raw,
+    }, used_claude
+
+
+def insert_candidate(cur, scan_id, c):
+    cur.execute(
+        "INSERT INTO candidates (scan_id, filename, name, email, phone, score, grade, status, "
+        "section_scores, matched_keywords, missing_keywords, matched_skills, missing_skills, "
+        "extra_skills, reasons, file_data, suggestions, passed_checks, warning_checks, "
+        "issue_checks, semantic_score) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        (scan_id, c["filename"], c["name"], c["email"], c["phone"], c["score"], c["grade"],
+         c["status"], json.dumps(c["section_scores"]), json.dumps(c["matched_keywords"]),
+         json.dumps(c["missing_keywords"]), json.dumps(c["matched_skills"]),
+         json.dumps(c["missing_skills"]), json.dumps(c["extra_skills"]),
+         json.dumps(c["reasons"]), c["raw"],
+         json.dumps(c["suggestions"]), json.dumps(c["passed_checks"]),
+         json.dumps(c["warning_checks"]), json.dumps(c["issue_checks"]),
+         c["semantic_score"]),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Batched scan flow — solves Vercel's 4.5 MB request cap and 60 s timeout.
+#
+#   1. POST /scan/start         → JD only. Creates a pending scan, returns id.
+#   2. POST /scan/<id>/batch    → a few resumes at a time (client loops).
+#   3. POST /scan/<id>/finalize → compute avg/engine, mark done, return results URL.
+#
+# Each request carries only a handful of files, so it stays well under both the
+# payload limit and the function timeout no matter how many resumes total.
+# ---------------------------------------------------------------------------
+
+@app.route("/scan/start", methods=["POST"])
+def scan_start():
+    jd_file = request.files.get("jd_file")
+    if not jd_file or jd_file.filename == "":
+        return jsonify({"error": "Please upload a job description file."}), 400
+
+    jd_text = extract_text_from_file(jd_file.filename, jd_file.stream)
+    if not jd_text.strip():
+        return jsonify({"error": "Could not read text from the job description file."}), 400
+
+    keywords = top_keywords(jd_text, n=15)
+    jd_role = guess_role(jd_text, jd_file.filename)
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        "INSERT INTO scans (jd_filename, jd_role, keywords, resume_count, avg_score, "
+        "created_at, jd_text, status, claude_count) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+        (jd_file.filename, jd_role, json.dumps(keywords), 0, 0,
+         datetime.utcnow().isoformat(), jd_text, "pending", 0),
+    )
+    scan_id = cur.fetchone()[0]
+    db.commit()
+    cur.close()
+    return jsonify({"scan_id": scan_id})
+
+
+@app.route("/scan/<int:scan_id>/batch", methods=["POST"])
+def scan_batch(scan_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT jd_text, keywords FROM scans WHERE id = %s", (scan_id,))
+    row = fetchone_dict(cur)
+    if not row or not row["jd_text"]:
+        return jsonify({"error": "Scan not found."}), 404
+    jd_text = row["jd_text"]
+    keywords = json.loads(row["keywords"])
+
+    files = [f for f in request.files.getlist("resume_files") if f and f.filename]
+    docs = []
+    for f in files:
+        raw = f.read()
+        text = extract_text_from_file(f.filename, io.BytesIO(raw))
+        if text.strip():
+            docs.append((f.filename, text, raw))
+
+    processed, claude_in_batch = 0, 0
+    if docs:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(docs))) as pool:
+            futures = [pool.submit(process_resume_doc, jd_text, keywords, n, t, r)
+                       for n, t, r in docs]
+            for fut in concurrent.futures.as_completed(futures):
+                cand, used_claude = fut.result()
+                insert_candidate(cur, scan_id, cand)
+                processed += 1
+                if used_claude:
+                    claude_in_batch += 1
+
+    cur.execute(
+        "UPDATE scans SET resume_count = resume_count + %s, claude_count = claude_count + %s "
+        "WHERE id = %s",
+        (processed, claude_in_batch, scan_id),
+    )
+    db.commit()
+    cur.close()
+    return jsonify({"processed": processed, "skipped": len(files) - processed})
+
+
+@app.route("/scan/<int:scan_id>/finalize", methods=["POST"])
+def scan_finalize(scan_id):
+    db = get_db()
+    cur = db.cursor()
+    cur.execute(
+        "SELECT resume_count, claude_count, created_at, "
+        "COALESCE((SELECT ROUND(AVG(score)::numeric,1) FROM candidates WHERE scan_id=%s),0) AS avg "
+        "FROM scans WHERE id = %s",
+        (scan_id, scan_id),
+    )
+    row = fetchone_dict(cur)
+    if not row:
+        return jsonify({"error": "Scan not found."}), 404
+
+    total = row["resume_count"] or 0
+    if total == 0:
+        # nothing was screenable — delete the empty scan
+        cur.execute("DELETE FROM scans WHERE id = %s", (scan_id,))
+        db.commit()
+        cur.close()
+        return jsonify({"error": "No readable resumes were found (check formats: PDF, DOCX, TXT)."}), 400
+
+    claude_count = row["claude_count"] or 0
+    engine = "Screen Genie Engine" if claude_count >= max(1, total // 2) else "Rule-based"
+    try:
+        started = datetime.fromisoformat(row["created_at"])
+        duration = round((datetime.utcnow() - started).total_seconds(), 1)
+    except Exception:
+        duration = None
+
+    cur.execute(
+        "UPDATE scans SET avg_score = %s, engine = %s, duration_seconds = %s, status = 'done' "
+        "WHERE id = %s",
+        (float(row["avg"]), engine, duration, scan_id),
+    )
+    db.commit()
+    cur.close()
+    return jsonify({"redirect": url_for("results", scan_id=scan_id)})
+
+
+@app.route("/scan/<int:scan_id>/cancel", methods=["POST"])
+def scan_cancel(scan_id):
+    """Remove a half-finished scan if the user aborts mid-upload."""
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("DELETE FROM candidates WHERE scan_id = %s", (scan_id,))
+    cur.execute("DELETE FROM scans WHERE id = %s AND status = 'pending'", (scan_id,))
+    db.commit()
+    cur.close()
+    return jsonify({"ok": True})
+
+
+# Legacy single-request scan — still used for ZIP uploads (one file, extracted
+# server-side). Large ZIPs remain bound by the 60 s limit, so the UI steers big
+# batches toward the file picker (which streams in batches).
+@app.route("/scan", methods=["POST"])
+def scan():
+    jd_file = request.files.get("jd_file")
+    if not jd_file or jd_file.filename == "":
+        flash("Please upload a job description file.")
+        return redirect(url_for("index"))
+
+    jd_text = extract_text_from_file(jd_file.filename, jd_file.stream)
+    if not jd_text.strip():
+        flash("Could not read text from the job description file.")
+        return redirect(url_for("index"))
+
+    zip_file = request.files.get("resume_zip")
+    if not zip_file or zip_file.filename == "":
+        flash("Please upload a ZIP file of resumes.")
+        return redirect(url_for("index"))
+    resume_docs = extract_resumes_from_zip(zip_file.stream)
+    resume_docs = [(n, t, r) for n, t, r in resume_docs if t.strip()]
+    if not resume_docs:
+        flash("No readable resumes were found (check file formats: PDF, DOCX, TXT).")
+        return redirect(url_for("index"))
+
+    keywords = top_keywords(jd_text, n=15)
+    jd_role = guess_role(jd_text, jd_file.filename)
     start = time.time()
 
-    def _process_one(args):
-        filename, text, raw = args
-        claude_result = analyze_resume_with_claude(jd_text, text, keywords)
-        used_claude = claude_result is not None
-        analysis = claude_result or analyze_resume(jd_text, text, keywords)
-        score = analysis["score"]
-        return {
-            "filename": filename,
-            "name": analysis["contact"]["name"],
-            "email": analysis["contact"]["email"],
-            "phone": analysis["contact"]["phone"],
-            "score": score,
-            "grade": grade_for_score(score),
-            "status": status_for_score(score),
-            "section_scores": analysis["section_scores"],
-            "matched_keywords": analysis["matched_keywords"],
-            "missing_keywords": analysis["missing_keywords"],
-            "matched_skills": analysis["matched_skills"],
-            "missing_skills": analysis["missing_skills"],
-            "extra_skills": analysis["extra_skills"],
-            "reasons": analysis["reasons"],
-            "suggestions": analysis.get("suggestions", []),
-            "passed_checks": analysis.get("passed_checks", []),
-            "warning_checks": analysis.get("warning_checks", []),
-            "issue_checks": analysis.get("issue_checks", []),
-            "semantic_score": analysis.get("semantic_score", 0),
-            "raw": raw,
-        }, used_claude
-
-    candidates = []
-    claude_count = 0
-    with concurrent.futures.ThreadPoolExecutor(max_workers=20) as pool:
-        futures = [pool.submit(_process_one, doc) for doc in resume_docs]
+    candidates, claude_count = [], 0
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+        futures = [pool.submit(process_resume_doc, jd_text, keywords, n, t, r)
+                   for n, t, r in resume_docs]
         for fut in concurrent.futures.as_completed(futures):
             cand, used_claude = fut.result()
             candidates.append(cand)
@@ -278,109 +459,21 @@ def run_scan_sync(jd_file_name, jd_text, jd_role, keywords, resume_docs):
     duration = round(time.time() - start, 1)
     engine = "Screen Genie Engine" if claude_count >= max(1, len(candidates) // 2) else "Rule-based"
 
-    db = connect_db()
+    db = get_db()
     cur = db.cursor()
     cur.execute(
         "INSERT INTO scans (jd_filename, jd_role, keywords, resume_count, avg_score, "
-        "created_at, duration_seconds, engine) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
-        (jd_file_name, jd_role, json.dumps(keywords), len(candidates), avg_score,
+        "created_at, duration_seconds, engine, status) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'done') RETURNING id",
+        (jd_file.filename, jd_role, json.dumps(keywords), len(candidates), avg_score,
          datetime.utcnow().isoformat(), duration, engine),
     )
     scan_id = cur.fetchone()[0]
     for c in candidates:
-        cur.execute(
-            "INSERT INTO candidates (scan_id, filename, name, email, phone, score, grade, status, "
-            "section_scores, matched_keywords, missing_keywords, matched_skills, missing_skills, "
-            "extra_skills, reasons, file_data, suggestions, passed_checks, warning_checks, "
-            "issue_checks, semantic_score) "
-            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
-            (scan_id, c["filename"], c["name"], c["email"], c["phone"], c["score"], c["grade"],
-             c["status"], json.dumps(c["section_scores"]), json.dumps(c["matched_keywords"]),
-             json.dumps(c["missing_keywords"]), json.dumps(c["matched_skills"]),
-             json.dumps(c["missing_skills"]), json.dumps(c["extra_skills"]),
-             json.dumps(c["reasons"]), c["raw"],
-             json.dumps(c["suggestions"]), json.dumps(c["passed_checks"]),
-             json.dumps(c["warning_checks"]), json.dumps(c["issue_checks"]),
-             c["semantic_score"]),
-        )
+        insert_candidate(cur, scan_id, c)
     db.commit()
     cur.close()
-    db.close()
-    return scan_id
-
-
-@app.route("/scan", methods=["POST"])
-def scan():
-    jd_file = request.files.get("jd_file")
-    resume_mode = request.form.get("resume_mode", "files")
-
-    if not jd_file or jd_file.filename == "":
-        flash("Please upload a job description file.")
-        return redirect(url_for("index"))
-
-    jd_text = extract_text_from_file(jd_file.filename, jd_file.stream)
-    if not jd_text.strip():
-        flash("Could not read text from the job description file.")
-        return redirect(url_for("index"))
-
-    resume_docs = []
-    if resume_mode == "zip":
-        zip_file = request.files.get("resume_zip")
-        if not zip_file or zip_file.filename == "":
-            flash("Please upload a ZIP file of resumes.")
-            return redirect(url_for("index"))
-        resume_docs = extract_resumes_from_zip(zip_file.stream)
-    else:
-        files = request.files.getlist("resume_files")
-        files = [f for f in files if f and f.filename]
-        if not files:
-            flash("Please select one or more resume files.")
-            return redirect(url_for("index"))
-        for f in files:
-            raw = f.read()
-            text = extract_text_from_file(f.filename, io.BytesIO(raw))
-            resume_docs.append((f.filename, text, raw))
-
-    resume_docs = [(name, text, raw) for name, text, raw in resume_docs if text.strip()]
-    if not resume_docs:
-        flash("No readable resumes were found (check file formats: PDF, DOCX, TXT).")
-        return redirect(url_for("index"))
-
-    keywords = top_keywords(jd_text, n=15)
-    jd_role = guess_role(jd_text, jd_file.filename)
-
-    try:
-        scan_id = run_scan_sync(jd_file.filename, jd_text, jd_role, keywords, resume_docs)
-    except Exception as e:
-        flash(f"Scan failed: {e}")
-        return redirect(url_for("index"))
-
     return redirect(url_for("results", scan_id=scan_id))
-
-
-@app.route("/scan_progress/<job_id>")
-def scan_progress(job_id):
-    with JOBS_LOCK:
-        job = JOBS.get(job_id)
-        if not job:
-            return jsonify({"status": "missing"}), 404
-        total = job["total"]
-        done = job["done"]
-        elapsed = time.time() - job["started_at"]
-        status = job["status"]
-        scan_id = job["scan_id"]
-        error = job["error"]
-
-    percent = round((done / total) * 100) if total else 0
-    if done > 0 and status == "processing":
-        eta = max(0, round((elapsed / done) * (total - done)))
-    else:
-        eta = None
-    return jsonify({
-        "status": status, "total": total, "done": done, "percent": percent,
-        "elapsed": round(elapsed), "eta": eta, "scan_id": scan_id, "error": error,
-    })
 
 
 @app.route("/results/<int:scan_id>")
@@ -541,7 +634,7 @@ def candidate_download_file(candidate_id):
 def history():
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT id, jd_filename, jd_role, keywords, resume_count, avg_score, created_at FROM scans ORDER BY created_at DESC")
+    cur.execute("SELECT id, jd_filename, jd_role, keywords, resume_count, avg_score, created_at FROM scans WHERE status IS DISTINCT FROM 'pending' ORDER BY created_at DESC")
     scans = fetchall_dict(cur)
     cur.execute("SELECT id, jd_filename, detected_role, overall_score, seniority_level, created_at FROM jd_analyses ORDER BY created_at DESC")
     jd_analyses = fetchall_dict(cur)
@@ -597,7 +690,7 @@ def dashboard():
     """)
     agg = fetchone_dict(cur)
 
-    cur.execute("SELECT COUNT(*) FROM scans")
+    cur.execute("SELECT COUNT(*) FROM scans WHERE status IS DISTINCT FROM 'pending'")
     total_scans = cur.fetchone()[0]
 
     total_resumes = agg["total_resumes"] or 0
@@ -608,7 +701,7 @@ def dashboard():
 
     cur.execute("SELECT id, scan_id, filename, name, score, grade, status FROM candidates ORDER BY score DESC LIMIT 8")
     top_candidates = fetchall_dict(cur)
-    cur.execute("SELECT id, jd_filename, jd_role, keywords, resume_count, avg_score, created_at FROM scans ORDER BY created_at DESC LIMIT 5")
+    cur.execute("SELECT id, jd_filename, jd_role, keywords, resume_count, avg_score, created_at FROM scans WHERE status IS DISTINCT FROM 'pending' ORDER BY created_at DESC LIMIT 5")
     recent_scans = fetchall_dict(cur)
 
     # ── JD Analysis KPIs (single SQL pass) ──
