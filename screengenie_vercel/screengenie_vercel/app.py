@@ -552,7 +552,7 @@ def results(scan_id):
     cur.execute(
         "SELECT id, scan_id, filename, name, email, phone, score, grade, status, "
         "section_scores, matched_skills, missing_skills FROM candidates "
-        "WHERE scan_id = %s ORDER BY score DESC",
+        "WHERE scan_id = %s ORDER BY score DESC, COALESCE(semantic_score,0) DESC, id ASC",
         (scan_id,),
     )
     candidate_rows = fetchall_dict(cur)
@@ -580,7 +580,7 @@ def export_results_csv(scan_id):
     cur.execute(
         "SELECT score, grade, status, name, email, phone, filename, "
         "matched_skills, missing_skills FROM candidates "
-        "WHERE scan_id = %s ORDER BY score DESC",
+        "WHERE scan_id = %s ORDER BY score DESC, COALESCE(semantic_score,0) DESC, id ASC",
         (scan_id,),
     )
     rows = fetchall_dict(cur)
@@ -639,7 +639,7 @@ def candidate_detail(candidate_id):
 
     # Prev / next candidate within the same scan, ranked by score (desc).
     cur.execute(
-        "SELECT id FROM candidates WHERE scan_id = %s ORDER BY score DESC, id ASC",
+        "SELECT id FROM candidates WHERE scan_id = %s ORDER BY score DESC, COALESCE(semantic_score,0) DESC, id ASC",
         (candidate["scan_id"],),
     )
     ordered_ids = [r[0] for r in cur.fetchall()]
@@ -758,7 +758,7 @@ def dashboard():
     buckets = {"0-39": agg["b0"], "40-59": agg["b1"], "60-79": agg["b2"], "80-100": agg["b3"]}
     grade_counts = {"A": agg["ga"], "B": agg["gb"], "C": agg["gc"], "D": agg["gd"]}
 
-    cur.execute("SELECT id, scan_id, filename, name, score, grade, status FROM candidates ORDER BY score DESC LIMIT 8")
+    cur.execute("SELECT id, scan_id, filename, name, score, grade, status FROM candidates ORDER BY score DESC, COALESCE(semantic_score,0) DESC, id ASC LIMIT 8")
     top_candidates = fetchall_dict(cur)
     cur.execute("SELECT id, jd_filename, jd_role, keywords, resume_count, avg_score, created_at FROM scans WHERE status IS DISTINCT FROM 'pending' ORDER BY created_at DESC LIMIT 5")
     recent_scans = fetchall_dict(cur)
