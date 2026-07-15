@@ -6,6 +6,12 @@
 <div class="crumbs"><a href="{{ url_for('index') }}">Bulk Screener</a> · Results</div>
 <div class="page-head">
   <div>
+    {% if scan['session_name'] %}
+    <div style="display:inline-flex; align-items:center; gap:8px; background:#ede9fe; border:1px solid #c4b5fd;
+         color:#5b21b6; font-weight:700; font-size:13px; padding:6px 14px; border-radius:999px; margin-bottom:10px;">
+      🏷️ {{ scan['session_name'] }}
+    </div>
+    {% endif %}
     <h1>Ranked Candidates</h1>
     <p class="lede"><strong>JD:</strong> {{ scan['jd_filename'] }} · <strong>Detected role:</strong> {{ scan['jd_role'] }}</p>
     <div class="scan-meta">
@@ -51,7 +57,7 @@
   <div class="toolbar-spacer"></div>
   <button type="button" class="ghost-btn" id="copy-emails">📧 Copy selected emails</button>
   <button type="button" class="ghost-btn" id="draft-email">✉ Draft invite</button>
-  <a class="ghost-btn" href="{{ url_for('export_results_csv', scan_id=scan['id']) }}">⬇ Export CSV</a>
+  <a class="ghost-btn" href="{{ url_for('export_results_xlsx', scan_id=scan['id']) }}">⬇ Export Excel</a>
 </div>
 
 <div class="card table-card">
