@@ -58,6 +58,7 @@
     <thead>
       <tr>
         <th>Date</th>
+        <th>Session</th>
         <th>Job Description</th>
         <th>Detected Role</th>
         <th>Resumes</th>
@@ -67,8 +68,9 @@
     </thead>
     <tbody>
       {% for s in scans %}
-      <tr class="scan-row" data-search="{{ (s['jd_filename'] ~ ' ' ~ (s['jd_role'] or ''))|lower }}">
+      <tr class="scan-row" data-search="{{ (s['jd_filename'] ~ ' ' ~ (s['jd_role'] or '') ~ ' ' ~ (s['session_name'] or ''))|lower }}">
         <td>{{ s['created_at'][:10] }} <span class="muted">{{ s['created_at'][11:16] }}</span></td>
+        <td>{% if s['session_name'] %}<span style="display:inline-block; background:#ede9fe; border:1px solid #c4b5fd; color:#5b21b6; font-weight:700; font-size:11px; padding:3px 9px; border-radius:999px;">🏷️ {{ s['session_name'] }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
         <td><strong>{{ s['jd_filename'] }}</strong></td>
         <td class="muted">{{ s['jd_role'] }}</td>
         <td>{{ s['resume_count'] }}</td>
