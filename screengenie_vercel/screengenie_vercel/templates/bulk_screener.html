@@ -219,6 +219,17 @@ async function collectResumes(mode) {
   return items;
 }
 
+// Remove duplicate resumes (same name + size) so the same person isn't scored twice.
+function dedupe(items) {
+  const seen = new Set(), out = [], dups = [];
+  for (const it of items) {
+    const key = it.name.toLowerCase() + '|' + it.size;
+    if (seen.has(key)) { dups.push(it.name); continue; }
+    seen.add(key); out.push(it);
+  }
+  return { out, dups };
+}
+
 // Pack files into size-aware batches; skip any single file too big for one request.
 function planBatches(items) {
   const skipped = [], usable = [];
@@ -245,7 +256,8 @@ async function runScan(jdFile, mode) {
   let scanId = null;
   const startedAt = Date.now();
   try {
-    const items = await collectResumes(mode);
+    const rawItems = await collectResumes(mode);
+    const { out: items, dups } = dedupe(rawItems);
     const { batches, skipped, usableCount } = planBatches(items);
 
     if (usableCount === 0) throw new Error('No usable resumes found (PDF / DOC / DOCX / TXT under 4 MB each).');
@@ -262,17 +274,26 @@ async function runScan(jdFile, mode) {
     if (!startRes.ok) throw new Error(startData.error || httpMsg(startRes, 'Could not start scan.'));
     scanId = startData.scan_id;
 
-    // 2) upload size-aware batches
+    // 2) upload size-aware batches (each batch retried once on transient failure)
     let done = 0;
     for (const batch of batches) {
-      const fd = new FormData();
-      batch.forEach(it => fd.append('resume_files', it.blob, it.name));
       setStage(`Screening resume ${done + 1}–${done + batch.length} of ${total}…`);
-      const res = await fetch(`/scan/${scanId}/batch`, { method: 'POST', body: fd });
-      if (!res.ok) {
-        const d = await readJson(res);
-        throw new Error(d.error || httpMsg(res, 'A batch failed.'));
+      let res = null, lastErr = 'A batch failed.';
+      for (let attempt = 0; attempt < 2; attempt++) {
+        try {
+          const fd = new FormData();
+          batch.forEach(it => fd.append('resume_files', it.blob, it.name));
+          res = await fetch(`/scan/${scanId}/batch`, { method: 'POST', body: fd });
+          if (res.ok) break;
+          const d = await readJson(res);
+          lastErr = d.error || httpMsg(res, 'A batch failed.');
+          if (res.status === 413) break;   // size won't change on retry — don't retry
+        } catch (e) {
+          lastErr = 'Network hiccup during upload.';
+        }
+        if (attempt === 0) { setStage('Retrying…'); await new Promise(r => setTimeout(r, 1200)); }
       }
+      if (!res || !res.ok) throw new Error(lastErr);
       done += batch.length;
       setRing(Math.min(95, (done / total) * 95));
       const elapsed = (Date.now() - startedAt) / 1000;
@@ -288,7 +309,10 @@ async function runScan(jdFile, mode) {
     const finData = await readJson(finRes);
     if (!finRes.ok) throw new Error(finData.error || httpMsg(finRes, 'Could not finalise scan.'));
     setRing(100);
-    setStage(skipped.length ? `Done — ${skipped.length} oversized file(s) skipped. Loading results…` : 'Done — loading results…');
+    const notes = [];
+    if (skipped.length) notes.push(`${skipped.length} oversized skipped`);
+    if (dups.length) notes.push(`${dups.length} duplicate(s) removed`);
+    setStage(notes.length ? `Done — ${notes.join(', ')}. Loading results…` : 'Done — loading results…');
     window.location = finData.redirect;
   } catch (err) {
     if (scanId) { try { await fetch(`/scan/${scanId}/cancel`, { method: 'POST' }); } catch (_) {} }
