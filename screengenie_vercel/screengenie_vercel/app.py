@@ -228,6 +228,8 @@ def init_db():
     cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS jd_text TEXT")
     cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS status TEXT")
     cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS claude_count INTEGER DEFAULT 0")
+    cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS session_name TEXT")
+    cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS cand_years INTEGER")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS jd_analyses (
             id SERIAL PRIMARY KEY,
@@ -317,6 +319,7 @@ def process_resume_doc(jd_text, keywords, filename, text, raw):
         "warning_checks": analysis.get("warning_checks", []),
         "issue_checks": analysis.get("issue_checks", []),
         "semantic_score": analysis.get("semantic_score", 0),
+        "cand_years": analysis.get("cand_years"),
         "raw": raw,
     }, used_claude
 
@@ -326,8 +329,8 @@ def insert_candidate(cur, scan_id, c):
         "INSERT INTO candidates (scan_id, filename, name, email, phone, score, grade, status, "
         "section_scores, matched_keywords, missing_keywords, matched_skills, missing_skills, "
         "extra_skills, reasons, file_data, suggestions, passed_checks, warning_checks, "
-        "issue_checks, semantic_score) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        "issue_checks, semantic_score, cand_years) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         (scan_id, c["filename"], c["name"], c["email"], c["phone"], c["score"], c["grade"],
          c["status"], json.dumps(c["section_scores"]), json.dumps(c["matched_keywords"]),
          json.dumps(c["missing_keywords"]), json.dumps(c["matched_skills"]),
@@ -335,7 +338,7 @@ def insert_candidate(cur, scan_id, c):
          json.dumps(c["reasons"]), c["raw"],
          json.dumps(c["suggestions"]), json.dumps(c["passed_checks"]),
          json.dumps(c["warning_checks"]), json.dumps(c["issue_checks"]),
-         c["semantic_score"]),
+         c["semantic_score"], c.get("cand_years")),
     )
 
 
@@ -362,15 +365,16 @@ def scan_start():
 
     keywords = top_keywords(jd_text, n=15)
     jd_role = guess_role(jd_text, jd_file.filename)
+    session_name = (request.form.get("session_name") or "").strip()[:120] or None
 
     db = get_db()
     cur = db.cursor()
     cur.execute(
         "INSERT INTO scans (jd_filename, jd_role, keywords, resume_count, avg_score, "
-        "created_at, jd_text, status, claude_count) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+        "created_at, jd_text, status, claude_count, session_name) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
         (jd_file.filename, jd_role, json.dumps(keywords), 0, 0,
-         datetime.utcnow().isoformat(), jd_text, "pending", 0),
+         datetime.utcnow().isoformat(), jd_text, "pending", 0, session_name),
     )
     scan_id = cur.fetchone()[0]
     db.commit()
@@ -501,6 +505,7 @@ def scan():
 
     keywords = top_keywords(jd_text, n=15)
     jd_role = guess_role(jd_text, jd_file.filename)
+    session_name = (request.form.get("session_name") or "").strip()[:120] or None
     start = time.time()
 
     candidates, claude_count = [], 0
@@ -513,7 +518,7 @@ def scan():
             if used_claude:
                 claude_count += 1
 
-    candidates.sort(key=lambda c: c["score"], reverse=True)
+    candidates.sort(key=lambda c: (c["score"], c.get("semantic_score", 0)), reverse=True)
     avg_score = round(sum(c["score"] for c in candidates) / len(candidates), 1)
     duration = round(time.time() - start, 1)
     engine = "Screen Genie Engine" if claude_count >= max(1, len(candidates) // 2) else "Rule-based"
@@ -522,10 +527,10 @@ def scan():
     cur = db.cursor()
     cur.execute(
         "INSERT INTO scans (jd_filename, jd_role, keywords, resume_count, avg_score, "
-        "created_at, duration_seconds, engine, status) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'done') RETURNING id",
+        "created_at, duration_seconds, engine, status, session_name) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'done',%s) RETURNING id",
         (jd_file.filename, jd_role, json.dumps(keywords), len(candidates), avg_score,
-         datetime.utcnow().isoformat(), duration, engine),
+         datetime.utcnow().isoformat(), duration, engine, session_name),
     )
     scan_id = cur.fetchone()[0]
     for c in candidates:
@@ -541,7 +546,7 @@ def results(scan_id):
     cur = db.cursor()
     cur.execute(
         "SELECT id, jd_filename, jd_role, keywords, resume_count, avg_score, created_at, "
-        "duration_seconds, engine FROM scans WHERE id = %s",
+        "duration_seconds, engine, session_name FROM scans WHERE id = %s",
         (scan_id,),
     )
     scan_row = fetchone_dict(cur)
@@ -569,16 +574,35 @@ def results(scan_id):
     return render_template("results.html", scan=scan_row, candidates=candidates, keywords=keywords)
 
 
-@app.route("/results/<int:scan_id>/export.csv")
-def export_results_csv(scan_id):
+def _priority_for(status, score):
+    """Recruiter priority derived from status/score."""
+    if status == "Shortlist" or score >= 70:
+        return "High"
+    if status == "Review" or score >= 45:
+        return "Medium"
+    return "Low"
+
+
+EXPORT_COLUMNS = [
+    ("Rank", 6), ("Priority", 10), ("Score", 7), ("Grade", 7), ("Status", 11),
+    ("Candidate Name", 24), ("Email", 30), ("Phone", 18), ("Experience (yrs)", 15),
+    ("Skills Matched", 14), ("Skills Missing", 14), ("Matched Skills", 46),
+    ("Missing Skills", 46), ("Resume File", 30),
+]
+
+
+def _export_rows(scan_id):
+    """Fetch scan + candidate rows shaped for export. Returns (scan, rows)."""
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT jd_role FROM scans WHERE id = %s", (scan_id,))
-    scan_row = fetchone_dict(cur)
-    if not scan_row:
-        abort(404)
+    cur.execute("SELECT id, jd_filename, jd_role, session_name, avg_score, resume_count, "
+                "created_at FROM scans WHERE id = %s", (scan_id,))
+    scan = fetchone_dict(cur)
+    if not scan:
+        cur.close()
+        return None, None
     cur.execute(
-        "SELECT score, grade, status, name, email, phone, filename, "
+        "SELECT score, grade, status, name, email, phone, filename, cand_years, "
         "matched_skills, missing_skills FROM candidates "
         "WHERE scan_id = %s ORDER BY score DESC, COALESCE(semantic_score,0) DESC, id ASC",
         (scan_id,),
@@ -586,23 +610,124 @@ def export_results_csv(scan_id):
     rows = fetchall_dict(cur)
     cur.close()
 
-    buf = io.StringIO()
-    writer = csv.writer(buf)
-    writer.writerow(["Rank", "Score", "Grade", "Status", "Name", "Email", "Phone",
-                     "Resume File", "Matched Skills", "Missing Skills"])
+    out = []
     for i, r in enumerate(rows, 1):
-        writer.writerow([
-            i, r["score"], r["grade"], r["status"], r["name"], r["email"], r["phone"],
-            r["filename"],
-            "; ".join(json.loads(r["matched_skills"])),
-            "; ".join(json.loads(r["missing_skills"])),
-        ])
-    csv_data = buf.getvalue()
-    fname = f"screen_genie_scan_{scan_id}.csv"
-    return Response(
-        csv_data, mimetype="text/csv",
-        headers={"Content-Disposition": f"attachment; filename={fname}"},
-    )
+        matched = json.loads(r["matched_skills"]); missing = json.loads(r["missing_skills"])
+        yrs = r.get("cand_years")
+        out.append({
+            "rank": i,
+            "priority": _priority_for(r["status"], r["score"]),
+            "score": r["score"], "grade": r["grade"], "status": r["status"],
+            "name": r["name"], "email": r["email"], "phone": r["phone"],
+            "experience": (f"{yrs}" if yrs is not None else "—"),
+            "n_matched": len(matched), "n_missing": len(missing),
+            "matched": ", ".join(matched), "missing": ", ".join(missing),
+            "file": r["filename"],
+        })
+    return scan, out
+
+
+@app.route("/results/<int:scan_id>/export.xlsx")
+def export_results_xlsx(scan_id):
+    scan, rows = _export_rows(scan_id)
+    if scan is None:
+        abort(404)
+
+    title = scan.get("session_name") or scan.get("jd_role") or scan.get("jd_filename") or "Screening"
+
+    try:
+        from openpyxl import Workbook
+        from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+        from openpyxl.utils import get_column_letter
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Candidates"
+
+        # ── Title / meta banner ──
+        ncols = len(EXPORT_COLUMNS)
+        ws.merge_cells(start_row=1, start_column=1, end_row=1, end_column=ncols)
+        c = ws.cell(row=1, column=1, value=f"Screen Genie — {title}")
+        c.font = Font(bold=True, size=15, color="FFFFFF")
+        c.fill = PatternFill("solid", fgColor="111114")
+        c.alignment = Alignment(horizontal="left", vertical="center")
+        ws.row_dimensions[1].height = 26
+
+        ws.merge_cells(start_row=2, start_column=1, end_row=2, end_column=ncols)
+        meta = (f"JD: {scan.get('jd_filename','')}   ·   Role: {scan.get('jd_role','')}   ·   "
+                f"Candidates: {scan.get('resume_count',len(rows))}   ·   Avg score: {scan.get('avg_score','')}%   ·   "
+                f"Date: {str(scan.get('created_at',''))[:10]}")
+        c2 = ws.cell(row=2, column=1, value=meta)
+        c2.font = Font(size=10, color="555555")
+        ws.row_dimensions[2].height = 18
+
+        # ── Header row ──
+        header_row = 4
+        thin = Side(style="thin", color="D9D9E3")
+        border = Border(left=thin, right=thin, top=thin, bottom=thin)
+        for col, (name, width) in enumerate(EXPORT_COLUMNS, 1):
+            cell = ws.cell(row=header_row, column=col, value=name)
+            cell.font = Font(bold=True, color="FFFFFF", size=11)
+            cell.fill = PatternFill("solid", fgColor="4B4BE6")
+            cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
+            cell.border = border
+            ws.column_dimensions[get_column_letter(col)].width = width
+        ws.row_dimensions[header_row].height = 24
+
+        prio_fill = {"High": "E6F4EA", "Medium": "FDF3E0", "Low": "FDECEB"}
+        prio_font = {"High": "137339", "Medium": "8A5A10", "Low": "A3271E"}
+
+        for idx, r in enumerate(rows):
+            rr = header_row + 1 + idx
+            values = [r["rank"], r["priority"], r["score"], r["grade"], r["status"],
+                      r["name"], r["email"], r["phone"], r["experience"],
+                      r["n_matched"], r["n_missing"], r["matched"], r["missing"], r["file"]]
+            for col, val in enumerate(values, 1):
+                cell = ws.cell(row=rr, column=col, value=val)
+                cell.border = border
+                cell.alignment = Alignment(
+                    horizontal="center" if col in (1, 2, 3, 4, 5, 9, 10, 11) else "left",
+                    vertical="top", wrap_text=col in (12, 13),
+                )
+                if col == 2:  # priority colouring
+                    cell.fill = PatternFill("solid", fgColor=prio_fill[r["priority"]])
+                    cell.font = Font(bold=True, color=prio_font[r["priority"]])
+                if idx % 2 == 1 and col != 2:  # zebra striping
+                    cell.fill = PatternFill("solid", fgColor="F7F7FB")
+
+        ws.freeze_panes = ws.cell(row=header_row + 1, column=1)
+        ws.auto_filter.ref = f"A{header_row}:{get_column_letter(ncols)}{header_row + len(rows)}"
+
+        buf = io.BytesIO()
+        wb.save(buf)
+        buf.seek(0)
+        safe = "".join(ch for ch in title if ch.isalnum() or ch in " -_")[:40].strip() or "screening"
+        return Response(
+            buf.getvalue(),
+            mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            headers={"Content-Disposition": f'attachment; filename="ScreenGenie_{safe}.xlsx"'},
+        )
+    except ImportError:
+        # openpyxl unavailable → structured CSV fallback with the same columns
+        buf = io.StringIO()
+        w = csv.writer(buf)
+        w.writerow([f"Screen Genie — {title}"])
+        w.writerow([f"JD: {scan.get('jd_filename','')}", f"Role: {scan.get('jd_role','')}",
+                    f"Candidates: {scan.get('resume_count',len(rows))}", f"Avg: {scan.get('avg_score','')}%"])
+        w.writerow([])
+        w.writerow([n for n, _ in EXPORT_COLUMNS])
+        for r in rows:
+            w.writerow([r["rank"], r["priority"], r["score"], r["grade"], r["status"],
+                        r["name"], r["email"], r["phone"], r["experience"],
+                        r["n_matched"], r["n_missing"], r["matched"], r["missing"], r["file"]])
+        return Response(buf.getvalue(), mimetype="text/csv",
+                        headers={"Content-Disposition": f"attachment; filename=ScreenGenie_scan_{scan_id}.csv"})
+
+
+# Back-compat: old CSV link now redirects to the richer Excel export
+@app.route("/results/<int:scan_id>/export.csv")
+def export_results_csv(scan_id):
+    return redirect(url_for("export_results_xlsx", scan_id=scan_id))
 
 
 @app.route("/candidate/<int:candidate_id>")
@@ -634,7 +759,7 @@ def candidate_detail(candidate_id):
     candidate["warning_checks"] = json.loads(candidate["warning_checks"]) if candidate["warning_checks"] else []
     candidate["issue_checks"] = json.loads(candidate["issue_checks"]) if candidate["issue_checks"] else []
 
-    cur.execute("SELECT id, jd_filename, jd_role, keywords, resume_count, avg_score, created_at FROM scans WHERE id = %s", (candidate["scan_id"],))
+    cur.execute("SELECT id, jd_filename, jd_role, keywords, resume_count, avg_score, created_at, session_name FROM scans WHERE id = %s", (candidate["scan_id"],))
     scan_row = fetchone_dict(cur)
 
     # Prev / next candidate within the same scan, ranked by score (desc).
@@ -693,7 +818,7 @@ def candidate_download_file(candidate_id):
 def history():
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT id, jd_filename, jd_role, keywords, resume_count, avg_score, created_at FROM scans WHERE status IS DISTINCT FROM 'pending' ORDER BY created_at DESC")
+    cur.execute("SELECT id, jd_filename, jd_role, keywords, resume_count, avg_score, created_at, session_name FROM scans WHERE status IS DISTINCT FROM 'pending' ORDER BY created_at DESC")
     scans = fetchall_dict(cur)
     cur.execute("SELECT id, jd_filename, detected_role, overall_score, seniority_level, created_at FROM jd_analyses ORDER BY created_at DESC")
     jd_analyses = fetchall_dict(cur)
