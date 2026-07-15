@@ -6,3 +6,4 @@ pg8000==1.31.2
 anthropic>=0.69.0
 python-dotenv>=1.0.0
 fpdf2>=2.7.9
+openpyxl>=3.1.2
