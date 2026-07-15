@@ -13,6 +13,13 @@
   {{ candidate['name'] }}
 </div>
 
+{% if scan and scan['session_name'] %}
+<div style="display:inline-flex; align-items:center; gap:8px; background:#ede9fe; border:1px solid #c4b5fd;
+     color:#5b21b6; font-weight:700; font-size:13px; padding:6px 14px; border-radius:999px; margin-bottom:10px;">
+  🏷️ {{ scan['session_name'] }}
+</div>
+{% endif %}
+
 {# ── Prev / next navigation ── #}
 <div class="cand-nav">
   {% if prev_id %}<a class="ghost-btn" href="{{ url_for('candidate_detail', candidate_id=prev_id) }}">← Prev</a>
