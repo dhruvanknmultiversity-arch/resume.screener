@@ -1,0 +1,15 @@
+{% extends 'base.html' %}
+{% set active = '' %}
+{% block title %}{{ code or 'Error' }}{% endblock %}
+{% block content %}
+<div class="empty card" style="max-width:560px; margin:60px auto;">
+  <div class="empty-ico">{{ icon or '⚠️' }}</div>
+  <h3>{{ heading or 'Something went wrong' }}</h3>
+  <p>{{ message or 'An unexpected error occurred. Please try again.' }}</p>
+  <div style="display:flex; gap:10px; justify-content:center; flex-wrap:wrap; margin-top:8px;">
+    <a class="primary-btn" href="{{ url_for('index') }}" style="text-decoration:none;">⚡ Back to Bulk Screener</a>
+    <a class="ghost-btn big" href="javascript:history.back()">← Go back</a>
+  </div>
+  {% if code %}<p class="muted" style="margin-top:18px; font-size:11px;">Error code: {{ code }}</p>{% endif %}
+</div>
+{% endblock %}
