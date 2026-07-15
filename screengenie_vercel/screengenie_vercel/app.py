@@ -37,6 +37,54 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "screen-genie-internal-dev-key")
 app.config["MAX_CONTENT_LENGTH"] = 60 * 1024 * 1024  # 60 MB
 
+
+# ---------------------------------------------------------------------------
+# Friendly error pages — never show a raw stack trace or bare Vercel error.
+# JSON requests (our fetch calls) get a JSON body; page loads get the HTML page.
+# ---------------------------------------------------------------------------
+def _wants_json():
+    return (request.path.startswith("/scan/") or
+            request.accept_mimetypes.best == "application/json" or
+            request.headers.get("X-Requested-With") == "fetch")
+
+
+def _error_response(code, heading, message, icon="⚠️"):
+    if _wants_json():
+        return jsonify({"error": message}), code
+    try:
+        return render_template("error.html", code=code, heading=heading,
+                               message=message, icon=icon), code
+    except Exception:
+        return f"{code} — {message}", code
+
+
+@app.errorhandler(404)
+def _err_404(e):
+    return _error_response(404, "Page not found",
+                           "That page or record doesn't exist. It may have been deleted.", "🔍")
+
+
+@app.errorhandler(413)
+def _err_413(e):
+    return _error_response(413, "Upload too large",
+                           "That upload exceeded the size limit. Very large files are skipped "
+                           "automatically — please try again with the Files tab.", "📦")
+
+
+@app.errorhandler(500)
+@app.errorhandler(Exception)
+def _err_500(e):
+    import sys, traceback
+    traceback.print_exc(file=sys.stderr)
+    # Re-raise HTTP errors that already have their own handler
+    code = getattr(e, "code", 500) or 500
+    if code == 404:
+        return _err_404(e)
+    if code == 413:
+        return _err_413(e)
+    return _error_response(500, "Something went wrong",
+                           "The server hit an unexpected error. Please try again in a moment.", "🛠️")
+
 # Read at request time so Railway's env vars are always picked up
 def get_database_url():
     # Try multiple env var names Railway might use
@@ -90,13 +138,21 @@ def connect_db():
     if not url or "://" not in url:
         raise RuntimeError(f"DATABASE_URL not set or invalid: '{url}'")
     p = parse_db_url(url)
-    conn = pg8000.dbapi.connect(
-        host=p["host"], port=p["port"], database=p["database"],
-        user=p["user"], password=p["password"], ssl_context=True,
-        timeout=10,
-    )
-    conn.autocommit = False
-    return conn
+    last_err = None
+    for attempt in range(2):  # one retry for transient pooler hiccups
+        try:
+            conn = pg8000.dbapi.connect(
+                host=p["host"], port=p["port"], database=p["database"],
+                user=p["user"], password=p["password"], ssl_context=True,
+                timeout=10,
+            )
+            conn.autocommit = False
+            return conn
+        except Exception as e:
+            last_err = e
+            if attempt == 0:
+                time.sleep(0.8)
+    raise last_err
 
 
 def get_db():
