@@ -21,6 +21,17 @@
 </div>
 
 <form class="screen-form" id="screen-form" action="{{ url_for('scan') }}" method="post" enctype="multipart/form-data">
+  {# Name this screening session — shown on results, candidates & history #}
+  <div class="card" style="margin-bottom:22px; padding:18px 22px;">
+    <label for="session-name" style="display:block; font-weight:700; font-size:14px; margin-bottom:8px;">
+      🏷️ Name this screening session <span style="font-weight:400; color:var(--muted); font-size:12px;">(optional but recommended)</span>
+    </label>
+    <input type="text" id="session-name" name="session_name" maxlength="120"
+      placeholder="e.g. Backend Engineer — March 2026 · Batch 1"
+      style="width:100%; padding:11px 14px; border:1px solid var(--border); border-radius:10px;
+             font-size:14px; font-family:inherit; background:#fff; color:var(--text);">
+    <p class="muted" style="margin-top:6px; font-size:12px;">A clear label keeps every candidate result tagged to the right role — no confusion later.</p>
+  </div>
   <div class="grid-2">
     <div class="card upload">
       <div class="card-head">
@@ -266,9 +277,10 @@ async function runScan(jdFile, mode) {
     const total = usableCount;
     setEta(`Estimated time: ${estimateMinutes(total)}`);
 
-    // 1) start scan with JD
+    // 1) start scan with JD (+ optional session name)
     const startFd = new FormData();
     startFd.append('jd_file', jdFile);
+    startFd.append('session_name', (document.getElementById('session-name').value || '').trim());
     const startRes = await fetch("{{ url_for('scan_start') }}", { method: 'POST', body: startFd });
     const startData = await readJson(startRes);
     if (!startRes.ok) throw new Error(startData.error || httpMsg(startRes, 'Could not start scan.'));
