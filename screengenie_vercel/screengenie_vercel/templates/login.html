@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<title>Sign in — Screen Genie</title>
+<style>
+  :root { --ink:#111; --muted:#666; --line:#e5e5e5; --bg:#f7f7f5; --card:#fff; --accent:#111; --err:#b42318; --err-bg:#fef3f2; }
+  @media (prefers-color-scheme: dark) {
+    :root { --ink:#f2f2f2; --muted:#a3a3a3; --line:#333; --bg:#141414; --card:#1d1d1d; --accent:#f2f2f2; --err:#fda29b; --err-bg:#3b1715; }
+  }
+  * { box-sizing: border-box; }
+  body { margin:0; min-height:100vh; display:flex; align-items:center; justify-content:center;
+         background:var(--bg); color:var(--ink); padding:16px;
+         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+  .card { width:100%; max-width:380px; background:var(--card); border:1px solid var(--line);
+          border-radius:14px; padding:28px; }
+  .brand { font-weight:700; font-size:20px; margin:0 0 2px; }
+  .org { font-size:11px; letter-spacing:.12em; color:#b7791f; font-weight:700; margin:0 0 20px; }
+  label { display:block; font-size:13px; font-weight:600; margin:14px 0 6px; }
+  input { width:100%; padding:11px 12px; border:1px solid var(--line); border-radius:9px;
+          font-size:15px; background:transparent; color:var(--ink); }
+  input:focus { outline:2px solid var(--accent); outline-offset:1px; }
+  button { width:100%; margin-top:20px; padding:12px; border:0; border-radius:9px;
+           background:var(--accent); color:var(--card); font-size:15px; font-weight:600; cursor:pointer; }
+  .err { background:var(--err-bg); color:var(--err); border-radius:9px; padding:10px 12px; font-size:13px; margin-top:4px; }
+  .note { color:var(--muted); font-size:12px; margin-top:18px; line-height:1.5; }
+</style>
+</head>
+<body>
+  <main class="card">
+    <p class="brand">Screen Genie</p>
+    <p class="org">MULTIVERSITY · P&amp;C</p>
+    {% if locked %}
+      <p><strong>Screen Genie is locked.</strong></p>
+      <p class="note">Sign-in hasn't been configured on this deployment yet, so candidate data stays hidden.
+        An admin needs to set <code>SECRET_KEY</code>, <code>TEAM_PASSWORD</code> and
+        <code>ALLOWED_EMAIL_DOMAINS</code> in the Vercel project settings, then redeploy.</p>
+    {% else %}
+      <form method="post" action="{{ url_for('login') }}" autocomplete="on">
+        <input type="hidden" name="next" value="{{ next_url or '' }}">
+        {% if error %}<div class="err" role="alert">{{ error }}</div>{% endif %}
+        <label for="email">Work email</label>
+        <input id="email" name="email" type="email" required autofocus autocomplete="username" value="{{ email or '' }}">
+        <label for="password">Team password</label>
+        <input id="password" name="password" type="password" required autocomplete="current-password">
+        <button type="submit">Sign in</button>
+      </form>
+      <p class="note">For the P&amp;C team only. Candidate data is confidential.</p>
+    {% endif %}
+  </main>
+</body>
+</html>

@@ -1199,7 +1199,10 @@ def analyze_resume_with_claude(jd_text, resume_text, jd_keywords):
         data = json.loads(_strip_json(result_text))
 
     except Exception as e:
-        _claude_debug(f"Claude failed: {type(e).__name__}: {e}")
+        # Always log (not only in debug): a silent failure here quietly
+        # downgrades the whole scan to the rule-based engine.
+        print(f"[screengenie:claude] resume analysis failed, using rule-based fallback: "
+              f"{type(e).__name__}: {e}", file=sys.stderr)
         return None
 
     def _clamp(v):
