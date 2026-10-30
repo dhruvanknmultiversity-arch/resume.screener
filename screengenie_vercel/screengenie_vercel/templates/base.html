@@ -317,6 +317,10 @@ h1 { font-size: 30px; font-weight: 800; letter-spacing: -.02em; margin-bottom: 8
 .bd-fill.g-B { background: var(--blue); }
 .bd-fill.g-C { background: var(--warn); }
 .bd-fill.g-D { background: var(--bad); }
+.bd-fill.g-F { background: var(--bad); opacity: .6; }
+.grade.g-F { background: var(--bad-bg); color: var(--bad); border-color: #f4c6c1; }
+.signout { display:flex; flex-direction:column; gap:6px; margin-bottom:10px; font-size:11px; color: var(--muted, #777); word-break: break-all; }
+.signout button { background:none; border:1px solid currentColor; border-radius:7px; padding:5px 8px; font-size:11px; color:inherit; cursor:pointer; }
 .bd-val { text-align: right; font-weight: 700; }
 .note { font-size: 11px; color: var(--muted); margin-top: 8px; }
 .muted { color: var(--muted); font-size: 12px; }
@@ -552,6 +556,12 @@ h1 { font-size: 30px; font-weight: 800; letter-spacing: -.02em; margin-bottom: 8
       </a>
     </nav>
     <div class="side-foot">
+      {% if current_user_email %}
+      <form class="signout" method="post" action="{{ url_for('logout') }}">
+        <span title="Signed in">{{ current_user_email }}</span>
+        <button type="submit">Sign out</button>
+      </form>
+      {% endif %}
       <div class="env-badge">internal · v1.0</div>
     </div>
   </aside>

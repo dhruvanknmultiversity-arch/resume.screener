@@ -33,9 +33,12 @@ from parsing import (
     fix_jd_with_claude,
 )
 
+from auth import init_auth
+
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "screen-genie-internal-dev-key")
 app.config["MAX_CONTENT_LENGTH"] = 60 * 1024 * 1024  # 60 MB
+# Access gate: must be registered before any other before_request hook.
+init_auth(app)
 
 
 # ---------------------------------------------------------------------------
@@ -275,10 +278,8 @@ def guess_role(jd_text, jd_filename):
 
 @app.route("/healthz")
 def healthz():
-    url = get_database_url()
-    has_url = bool(url and "://" in url)
-    env_keys = [k for k in os.environ if "DATABASE" in k or "POSTGRES" in k or "PG" in k]
-    return {"status": "ok", "has_db_url": has_url, "db_env_keys": env_keys}
+    # Public endpoint: report liveness only, never configuration details.
+    return {"status": "ok"}
 
 
 @app.route("/")
@@ -806,7 +807,10 @@ def _send_resume(candidate_id, as_attachment):
 
 @app.route("/candidate/<int:candidate_id>/view")
 def candidate_view_file(candidate_id):
-    return _send_resume(candidate_id, as_attachment=False)
+    resp = _send_resume(candidate_id, as_attachment=False)
+    # Uploaded files are untrusted: never let one run scripts on our origin.
+    resp.headers["Content-Security-Policy"] = "sandbox; default-src 'none'; style-src 'unsafe-inline'; img-src data:"
+    return resp
 
 
 @app.route("/candidate/<int:candidate_id>/download")
@@ -869,7 +873,8 @@ def dashboard():
             COUNT(*) FILTER (WHERE grade = 'A')               AS ga,
             COUNT(*) FILTER (WHERE grade = 'B')               AS gb,
             COUNT(*) FILTER (WHERE grade = 'C')               AS gc,
-            COUNT(*) FILTER (WHERE grade = 'D')               AS gd
+            COUNT(*) FILTER (WHERE grade = 'D')               AS gd,
+            COUNT(*) FILTER (WHERE grade = 'F')               AS gf
         FROM candidates
     """)
     agg = fetchone_dict(cur)
@@ -881,7 +886,7 @@ def dashboard():
     avg_score = float(agg["avg_score"]) if total_resumes else 0
     shortlisted = agg["shortlisted"] or 0
     buckets = {"0-39": agg["b0"], "40-59": agg["b1"], "60-79": agg["b2"], "80-100": agg["b3"]}
-    grade_counts = {"A": agg["ga"], "B": agg["gb"], "C": agg["gc"], "D": agg["gd"]}
+    grade_counts = {"A": agg["ga"], "B": agg["gb"], "C": agg["gc"], "D": agg["gd"], "F": agg["gf"]}
 
     cur.execute("SELECT id, scan_id, filename, name, score, grade, status FROM candidates ORDER BY score DESC, COALESCE(semantic_score,0) DESC, id ASC LIMIT 8")
     top_candidates = fetchall_dict(cur)
