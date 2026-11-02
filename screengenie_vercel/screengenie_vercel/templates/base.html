@@ -556,9 +556,9 @@ h1 { font-size: 30px; font-weight: 800; letter-spacing: -.02em; margin-bottom: 8
       </a>
     </nav>
     <div class="side-foot">
-      {% if current_user_email %}
+      {% if signed_in %}
       <form class="signout" method="post" action="{{ url_for('logout') }}">
-        <span title="Signed in">{{ current_user_email }}</span>
+        <span title="Signed in">{{ current_user_email or 'Signed in' }}</span>
         <button type="submit">Sign out</button>
       </form>
       {% endif %}

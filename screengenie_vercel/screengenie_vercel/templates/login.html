@@ -35,16 +35,18 @@
     {% if locked %}
       <p><strong>Screen Genie is locked.</strong></p>
       <p class="note">Sign-in hasn't been configured on this deployment yet, so candidate data stays hidden.
-        An admin needs to set <code>SECRET_KEY</code>, <code>TEAM_PASSWORD</code> and
-        <code>ALLOWED_EMAIL_DOMAINS</code> in the Vercel project settings, then redeploy.</p>
+        An admin needs to set <code>SECRET_KEY</code> (32+ characters) and
+        <code>TEAM_PASSWORD</code> (8+ characters) in the Vercel project settings, then redeploy.</p>
     {% else %}
       <form method="post" action="{{ url_for('login') }}" autocomplete="on">
         <input type="hidden" name="next" value="{{ next_url or '' }}">
         {% if error %}<div class="err" role="alert">{{ error }}</div>{% endif %}
+        {% if need_email %}
         <label for="email">Work email</label>
         <input id="email" name="email" type="email" required autofocus autocomplete="username" value="{{ email or '' }}">
+        {% endif %}
         <label for="password">Team password</label>
-        <input id="password" name="password" type="password" required autocomplete="current-password">
+        <input id="password" name="password" type="password" required autocomplete="current-password" {% if not need_email %}autofocus{% endif %}>
         <button type="submit">Sign in</button>
       </form>
       <p class="note">For the P&amp;C team only. Candidate data is confidential.</p>

@@ -31,8 +31,9 @@ v2 rebuild can be checked against it.
 ## Day 0 changes (branch `v2/day00-login-gate`)
 
 1. **Login gate** (`auth.py`, `templates/login.html`): every page, API call and
-   resume file now requires sign-in with an allowed email + the team password.
-   Fails closed when not configured. Sign-out in the sidebar.
+   resume file now requires sign-in with the team password (an email allow-list
+   can be switched on later). Fails closed when not configured. Sign-out in the
+   sidebar. Tests in `tests/test_auth.py`.
 2. **Security headers** on every response; uploaded resumes viewed inline are
    sandboxed; `Cache-Control: no-store` for signed-in pages.
 3. **`/healthz`** returns only `{"status": "ok"}`.
@@ -47,7 +48,7 @@ and adds row-level security and non-guessable IDs.
 | Name | Example | Notes |
 | --- | --- | --- |
 | `SECRET_KEY` | 64 random characters | Generate with `python -c "import secrets; print(secrets.token_urlsafe(48))"` |
-| `TEAM_PASSWORD` | a long passphrase | Share with the HR team privately; rotate when someone leaves |
-| `ALLOWED_EMAIL_DOMAINS` | `multiversity.in` | Comma-separated |
+| `TEAM_PASSWORD` | a long passphrase (8+ characters) | Share with the HR team privately; rotate when someone leaves |
+| `ALLOWED_EMAIL_DOMAINS` | `multiversity.in` | Optional. If set (or `ALLOWED_EMAILS` is), a matching email is also required |
 | `ALLOWED_EMAILS` | `someone@gmail.com` | Optional extra addresses |
 | `SESSION_HOURS` | `12` | Optional |

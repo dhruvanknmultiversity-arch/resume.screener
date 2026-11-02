@@ -1,7 +1,8 @@
 """Day-0 access gate for Screen Genie.
 
 Every route except /login, /logout, /healthz and /static now requires a signed-in
-session. Sign-in = a company email address + the shared team password. This is a
+session. Sign-in = the shared team password. If ALLOWED_EMAIL_DOMAINS or
+ALLOWED_EMAILS is set, a matching work email is required as well. This is a
 stop-gap until Day 1 replaces it with Supabase Auth + Google/Microsoft SSO.
 
 The gate FAILS CLOSED: if SECRET_KEY or TEAM_PASSWORD is not configured in the
@@ -12,9 +13,9 @@ Environment variables
 ---------------------
 SECRET_KEY             Long random string used to sign session cookies (required).
 TEAM_PASSWORD          Shared password for the HR team (required).
-ALLOWED_EMAIL_DOMAINS  Comma-separated, e.g. "multiversity.in,example.com".
-ALLOWED_EMAILS         Optional comma-separated extra addresses (e.g. a Gmail admin).
-                       At least one of the two allow-lists must be set.
+ALLOWED_EMAIL_DOMAINS  Optional. Comma-separated, e.g. "multiversity.in".
+ALLOWED_EMAILS         Optional. Comma-separated extra addresses.
+                       If neither is set, sign-in is password only.
 SESSION_HOURS          Optional, default 12.
 """
 
@@ -43,14 +44,18 @@ def _config_problem():
     key = os.environ.get("SECRET_KEY", "")
     if not key or key == _DEV_KEY or len(key) < 32:
         return "SECRET_KEY is missing or too short (use at least 32 random characters)."
-    if not os.environ.get("TEAM_PASSWORD"):
-        return "TEAM_PASSWORD is not set."
-    if not (_csv_env("ALLOWED_EMAIL_DOMAINS") or _csv_env("ALLOWED_EMAILS")):
-        return "Set ALLOWED_EMAIL_DOMAINS and/or ALLOWED_EMAILS."
+    if len(os.environ.get("TEAM_PASSWORD", "")) < 8:
+        return "TEAM_PASSWORD is not set or shorter than 8 characters."
     return None
 
 
+def email_required():
+    return bool(_csv_env("ALLOWED_EMAIL_DOMAINS") or _csv_env("ALLOWED_EMAILS"))
+
+
 def email_allowed(email):
+    if not email_required():
+        return True
     email = (email or "").strip().lower()
     if "@" not in email or email.count("@") != 1:
         return False
@@ -112,7 +117,7 @@ def init_auth(app):
             if _wants_json():
                 return jsonify({"error": "Screen Genie is locked: sign-in is not configured yet."}), 503
             return render_template("login.html", locked=True), 503
-        if current_user() and email_allowed(current_user()):
+        if session.get("signed_in") and email_allowed(current_user()):
             return None
         session.clear()
         if _wants_json():
@@ -134,14 +139,14 @@ def init_auth(app):
             "connect-src 'self'; frame-ancestors 'self'; "
             "base-uri 'self'; form-action 'self'; object-src 'self'",
         )
-        if current_user():
+        if session.get("signed_in"):
             # Candidate data must never sit in shared or browser caches.
             resp.headers["Cache-Control"] = "no-store"
         return resp
 
     @app.context_processor
     def _inject_user():
-        return {"current_user_email": current_user()}
+        return {"current_user_email": current_user(), "signed_in": bool(session.get("signed_in"))}
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
@@ -149,25 +154,27 @@ def init_auth(app):
             return render_template("login.html", locked=True), 503
         next_url = _safe_next(request.values.get("next")) or url_for("index")
         if request.method == "GET":
-            if current_user() and email_allowed(current_user()):
+            if session.get("signed_in") and email_allowed(current_user()):
                 return redirect(next_url)
-            return render_template("login.html", next_url=next_url)
+            return render_template("login.html", next_url=next_url, need_email=email_required())
 
         email = (request.form.get("email") or "").strip().lower()
         password = request.form.get("password") or ""
         if email_allowed(email) and password_ok(password):
             session.clear()
             session.permanent = True
-            session["user_email"] = email
+            session["signed_in"] = True
+            session["user_email"] = email if email_required() else None
             session["signed_in_at"] = int(time.time())
-            print(f"[screen-genie] sign-in ok: {email}", file=sys.stderr)
+            print(f"[screen-genie] sign-in ok: {email or 'team password'}", file=sys.stderr)
             return redirect(next_url)
 
         time.sleep(_FAILED_DELAY_SECONDS)  # slow down password guessing
-        print(f"[screen-genie] sign-in failed for: {email or '(blank)'}", file=sys.stderr)
+        print(f"[screen-genie] sign-in failed for: {email or '(password only)'}", file=sys.stderr)
         return render_template(
-            "login.html", next_url=next_url, email=email,
-            error="That email isn't allowed or the password is wrong.",
+            "login.html", next_url=next_url, email=email, need_email=email_required(),
+            error=("That email isn't allowed or the password is wrong."
+                   if email_required() else "That password is wrong."),
         ), 401
 
     @app.route("/logout", methods=["POST"])
