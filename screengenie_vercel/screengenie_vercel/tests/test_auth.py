@@ -91,3 +91,11 @@ def test_optional_email_mode():
     c2 = client(SECRET_KEY="x" * 40, TEAM_PASSWORD=PW, ALLOWED_EMAIL_DOMAINS="multiversity.in")
     assert c2.post("/login", data={"email": "hr@multiversity.in", "password": PW}).status_code == 302
     assert b"hr@multiversity.in" in c2.get("/").data
+
+
+def test_locked_page_names_the_problem_without_values():
+    r = client(SECRET_KEY="tooshort", TEAM_PASSWORD="").get("/")
+    assert r.status_code == 503
+    assert b"SECRET_KEY is too short (8 characters" in r.data
+    assert b"TEAM_PASSWORD is not set" in r.data
+    assert b"tooshort" not in r.data

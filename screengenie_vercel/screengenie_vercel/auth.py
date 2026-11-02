@@ -41,12 +41,18 @@ def _csv_env(name):
 
 def _config_problem():
     """Return a human-readable reason the gate cannot work, or None if OK."""
-    key = os.environ.get("SECRET_KEY", "")
-    if not key or key == _DEV_KEY or len(key) < 32:
-        return "SECRET_KEY is missing or too short (use at least 32 random characters)."
-    if len(os.environ.get("TEAM_PASSWORD", "")) < 8:
-        return "TEAM_PASSWORD is not set or shorter than 8 characters."
-    return None
+    key = os.environ.get("SECRET_KEY", "").strip()
+    pw = os.environ.get("TEAM_PASSWORD", "")
+    problems = []
+    if not key:
+        problems.append("SECRET_KEY is not set for this environment.")
+    elif key == _DEV_KEY or len(key) < 32:
+        problems.append(f"SECRET_KEY is too short ({len(key)} characters; needs 32 or more).")
+    if not pw:
+        problems.append("TEAM_PASSWORD is not set for this environment.")
+    elif len(pw) < 8:
+        problems.append(f"TEAM_PASSWORD is too short ({len(pw)} characters; needs 8 or more).")
+    return " ".join(problems) or None
 
 
 def email_required():
@@ -116,7 +122,7 @@ def init_auth(app):
             print(f"[screen-genie] access gate not configured: {problem}", file=sys.stderr)
             if _wants_json():
                 return jsonify({"error": "Screen Genie is locked: sign-in is not configured yet."}), 503
-            return render_template("login.html", locked=True), 503
+            return render_template("login.html", locked=True, problem=problem), 503
         if session.get("signed_in") and email_allowed(current_user()):
             return None
         session.clear()
@@ -146,12 +152,14 @@ def init_auth(app):
 
     @app.context_processor
     def _inject_user():
-        return {"current_user_email": current_user(), "signed_in": bool(session.get("signed_in"))}
+        return {"current_user_email": current_user(), "signed_in": bool(session.get("signed_in")),
+                "vercel_env": os.environ.get("VERCEL_ENV", "local")}
 
     @app.route("/login", methods=["GET", "POST"])
     def login():
-        if _config_problem():
-            return render_template("login.html", locked=True), 503
+        problem = _config_problem()
+        if problem:
+            return render_template("login.html", locked=True, problem=problem), 503
         next_url = _safe_next(request.values.get("next")) or url_for("index")
         if request.method == "GET":
             if session.get("signed_in") and email_allowed(current_user()):

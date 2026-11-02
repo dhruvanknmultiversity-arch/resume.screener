@@ -37,6 +37,8 @@
       <p class="note">Sign-in hasn't been configured on this deployment yet, so candidate data stays hidden.
         An admin needs to set <code>SECRET_KEY</code> (32+ characters) and
         <code>TEAM_PASSWORD</code> (8+ characters) in the Vercel project settings, then redeploy.</p>
+      {% if problem %}<div class="err" role="status"><strong>What's missing:</strong> {{ problem }}<br>
+        Environment: <code>{{ vercel_env }}</code></div>{% endif %}
     {% else %}
       <form method="post" action="{{ url_for('login') }}" autocomplete="on">
         <input type="hidden" name="next" value="{{ next_url or '' }}">
