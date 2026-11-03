@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_icons.html' import icon %}
 {% set active = 'bulk' %}
 {% block title %}Bulk Screener{% endblock %}
 {% block content %}
@@ -7,40 +8,34 @@
 <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 <div class="page-head">
   <div>
-    <div class="eyebrow">P&amp;C Toolkit</div>
+    <div class="eyebrow">P&amp;C toolkit</div>
     <h1>Bulk Resume Screener</h1>
-    <p class="lede">Upload one job description and any number of resumes (PDF, DOCX, TXT, or a ZIP).
-      Screen Genie parses every file, extracts contact details, and ranks every candidate by
-      semantic match + keyword coverage against the JD — works for any domain.</p>
+    <p class="lede">Upload one job description and up to 50 resumes (PDF, DOCX, TXT or a ZIP).
+      Screen Genie reads every file, pulls out contact details and ranks each candidate against the job.</p>
   </div>
   <div class="head-stats">
     <div class="stat-mini"><span>JD</span> any format</div>
     <div class="stat-mini"><span>Batch</span> up to 50</div>
-    <div class="stat-mini"><span>Engine</span> Screen Genie Engine</div>
   </div>
 </div>
 
 <form class="screen-form" id="screen-form" action="{{ url_for('scan') }}" method="post" enctype="multipart/form-data">
-  {# Name this screening session — shown on results, candidates & history #}
-  <div class="card" style="margin-bottom:22px; padding:18px 22px;">
-    <label for="session-name" style="display:block; font-weight:700; font-size:14px; margin-bottom:8px;">
-      🏷️ Name this screening session <span style="font-weight:400; color:var(--muted); font-size:12px;">(optional but recommended)</span>
-    </label>
-    <input type="text" id="session-name" name="session_name" maxlength="120"
-      placeholder="e.g. Backend Engineer — March 2026 · Batch 1"
-      style="width:100%; padding:11px 14px; border:1px solid var(--border); border-radius:10px;
-             font-size:14px; font-family:inherit; background:#fff; color:var(--text);">
-    <p class="muted" style="margin-top:6px; font-size:12px;">A clear label keeps every candidate result tagged to the right role — no confusion later.</p>
+  <div class="card" style="margin-bottom:20px;">
+    <label for="session-name" class="field-label">Name this screening session <span class="opt">(optional, recommended)</span></label>
+    <input type="text" id="session-name" name="session_name" maxlength="120" class="input"
+      placeholder="e.g. Backend Engineer — March 2026 · Batch 1">
+    <p class="muted" style="margin-top:8px;">A clear label keeps every result tagged to the right role.</p>
   </div>
+
   <div class="grid-2">
     <div class="card upload">
       <div class="card-head">
-        <div class="card-title">① Job Description</div>
+        <div class="card-title"><span class="eyebrow" style="display:inline; margin-right:6px;">Step 1</span> Job description</div>
         <div class="card-sub">PDF · DOC · DOCX · TXT</div>
       </div>
       <label class="drop" id="jd-drop">
         <input type="file" name="jd_file" id="jd-file" accept=".pdf,.doc,.docx,.txt,.rtf" required>
-        <div class="drop-ico">📄</div>
+        <div class="drop-ico">{{ icon('file') }}</div>
         <div class="drop-title">Drop the JD here</div>
         <div class="drop-sub">or click to browse</div>
         <div class="drop-chip" id="jd-chip"></div>
@@ -49,40 +44,33 @@
 
     <div class="card upload">
       <div class="card-head">
-        <div class="card-title">② Candidate Resumes</div>
-        <div class="seg">
+        <div class="card-title"><span class="eyebrow" style="display:inline; margin-right:6px;">Step 2</span> Candidate resumes</div>
+        <div class="seg" role="group" aria-label="Upload type">
           <button type="button" class="seg-btn active" data-mode="files">Files</button>
           <button type="button" class="seg-btn" data-mode="zip">ZIP</button>
         </div>
       </div>
-
       <input type="hidden" name="resume_mode" id="resume_mode" value="files">
-
       <label class="drop" id="files-drop">
         <input type="file" name="resume_files" id="resume-files" accept=".pdf,.doc,.docx,.txt,.rtf" multiple>
-        <div class="drop-ico">📎</div>
+        <div class="drop-ico">{{ icon('files') }}</div>
         <div class="drop-title">Drop multiple resumes</div>
-        <div class="drop-sub">PDF / DOC / DOCX / TXT · max 50 at a time</div>
+        <div class="drop-sub">PDF / DOC / DOCX / TXT · up to 50 at a time</div>
         <div class="drop-list" id="files-list"></div>
       </label>
-
       <label class="drop hidden" id="zip-drop">
         <input type="file" name="resume_zip" id="resume-zip" accept=".zip">
-        <div class="drop-ico">🗂️</div>
+        <div class="drop-ico">{{ icon('archive') }}</div>
         <div class="drop-title">Drop a ZIP of resumes</div>
-        <div class="drop-sub">Auto-unzipped in your browser · up to 50 · big ZIPs OK</div>
+        <div class="drop-sub">Unzipped in your browser · up to 50 · large ZIPs are fine</div>
         <div class="drop-chip" id="zip-chip"></div>
       </label>
-
-      {# Capacity + timing note #}
-      <div id="capacity-note" style="margin-top:14px; display:flex; align-items:flex-start; gap:8px;
-           background:#f0f0ff; border:1px solid #d9d9f5; border-radius:10px; padding:10px 12px;">
-        <span style="font-size:15px; line-height:1.2;">⚡</span>
-        <div style="font-size:12px; color:#4b4b6a; line-height:1.5;">
-          <strong>Upload up to 50 resumes per batch.</strong>
-          Screen Genie Engine processes them in parallel — roughly
-          <strong id="cap-eta">~10–20 sec each</strong>.
-          <span id="cap-live" style="color:#6C63FF; font-weight:600;"></span>
+      <div id="capacity-note" class="note-box">
+        {{ icon('bolt', 'ico-svg sm') }}
+        <div>
+          <strong>Up to 50 resumes per batch.</strong>
+          They are processed in parallel, roughly <strong id="cap-eta">10–20 seconds each</strong>.
+          <span id="cap-live" class="live"></span>
         </div>
       </div>
     </div>
@@ -92,21 +80,21 @@
   {# type="button" — NEVER a native submit, so the browser can never POST all
      files to /scan in one shot (which caused the 413). All uploads go through
      the batched JavaScript below. #}
-  <button type="button" class="primary-btn" id="run-btn">⚡ Screen Resumes</button>
+  <button type="button" class="primary-btn" id="run-btn">{{ icon('bolt') }} Screen resumes</button>
 </form>
 
 <div class="info-row">
   <div class="info-card">
-    <div class="info-ico g1">🎯</div>
-    <div><strong>Domain-agnostic scoring</strong><p>Keywords are auto-extracted from your JD — no manual tagging.</p></div>
+    <div class="info-ico">{{ icon('target') }}</div>
+    <div><strong>Works for any role</strong><p>Keywords and skills are taken from your JD automatically.</p></div>
   </div>
   <div class="info-card">
-    <div class="info-ico g2">🧑‍💼</div>
-    <div><strong>Auto-extracted profile</strong><p>Name, email and phone parsed from each resume.</p></div>
+    <div class="info-ico">{{ icon('user') }}</div>
+    <div><strong>Contact details found for you</strong><p>Name, email and phone are read from each resume.</p></div>
   </div>
   <div class="info-card">
-    <div class="info-ico g3">📈</div>
-    <div><strong>Recruiter-ready board</strong><p>Ranked list with grade, status, matched / missing keywords.</p></div>
+    <div class="info-ico">{{ icon('trend') }}</div>
+    <div><strong>Ready-to-use ranking</strong><p>Score, grade, status and matched or missing skills for every person.</p></div>
   </div>
 </div>
 
@@ -134,7 +122,7 @@ segBtns.forEach(b => b.addEventListener('click', () => {
 
 document.getElementById('jd-file').addEventListener('change', e => {
   const f = e.target.files[0];
-  document.getElementById('jd-chip').textContent = f ? '📄 ' + f.name : '';
+  document.getElementById('jd-chip').textContent = f ? f.name : '';
 });
 const MAX_RESUMES = 50;
 
@@ -177,7 +165,7 @@ filesInput.addEventListener('change', e => {
 });
 zipInput.addEventListener('change', e => {
   const f = e.target.files[0];
-  document.getElementById('zip-chip').textContent = f ? '🗂️ ' + f.name : '';
+  document.getElementById('zip-chip').textContent = f ? f.name : '';
 });
 
 // ── Progress ring helpers ──
@@ -360,39 +348,20 @@ document.getElementById('run-btn').addEventListener('click', () => {
 </script>
 
 {# Full-page loading overlay — single ring with real progress #}
-<div class="loading-overlay hidden" id="loading-overlay">
+<div class="loading-overlay hidden" id="loading-overlay" role="dialog" aria-modal="true" aria-labelledby="loading-title">
   <div class="loading-box">
     <div class="progress-ring">
-      <svg width="120" height="120" viewBox="0 0 120 120">
-        <circle cx="60" cy="60" r="52" stroke="#2d2f45" stroke-width="9" fill="none"/>
-        <circle id="ring-fill" cx="60" cy="60" r="52" stroke="#6C63FF" stroke-width="9" fill="none"
-          stroke-linecap="round" stroke-dasharray="326.7" stroke-dashoffset="326.7"
-          transform="rotate(-90 60 60)"/>
+      <svg width="120" height="120" viewBox="0 0 120 120" aria-hidden="true">
+        <circle class="ring-track" cx="60" cy="60" r="52" stroke-width="9" fill="none"/>
+        <circle class="ring-fill" id="ring-fill" cx="60" cy="60" r="52" stroke-width="9" fill="none"
+          stroke-linecap="round" stroke-dasharray="326.7" stroke-dashoffset="326.7" transform="rotate(-90 60 60)"/>
       </svg>
-      <div class="progress-pct" id="progress-pct">0%</div>
+      <div class="progress-pct" id="progress-pct" aria-live="polite">0%</div>
     </div>
-    <h2 style="margin-top:8px;">Screening Resumes…</h2>
-    <p class="muted" id="progress-stage" style="font-size:.9rem;margin-top:8px;color:#9b9bb5;">Starting…</p>
-    <p id="progress-eta" style="font-size:.85rem;margin-top:6px;color:#6C63FF;font-weight:600;">Estimating time…</p>
-    <p class="muted" style="font-size:.8rem;margin-top:16px">Please keep this tab open. You'll be taken to results automatically.</p>
+    <h2 id="loading-title">Screening resumes…</h2>
+    <p class="loading-stage" id="progress-stage">Starting…</p>
+    <p class="loading-eta" id="progress-eta">Estimating time…</p>
+    <p class="loading-hint">Keep this tab open. You'll be taken to the results automatically.</p>
   </div>
 </div>
-
-<style>
-.loading-overlay {
-  position: fixed; inset: 0; background: rgba(15,17,23,.97);
-  z-index: 9999; display: flex; align-items: center; justify-content: center;
-}
-.loading-overlay.hidden { display: none; }
-.loading-box {
-  text-align: center; max-width: 480px; padding: 44px 40px;
-  background: #1a1d2e; border-radius: 20px; border: 1px solid #2d2f45;
-}
-.progress-ring { position: relative; width: 120px; height: 120px; margin: 0 auto 8px; }
-#ring-fill { transition: stroke-dashoffset .4s ease; }
-.progress-pct {
-  position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
-  font-size: 28px; font-weight: 800; color: #fff;
-}
-</style>
 {% endblock %}

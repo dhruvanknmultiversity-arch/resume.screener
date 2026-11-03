@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_icons.html' import icon %}
 {% set active = 'jd-analysis' %}
 {% block title %}JD Analysis{% endblock %}
 {% block content %}
@@ -23,12 +24,12 @@
   <div class="grid-2" style="margin-bottom:22px;">
     <div class="card upload">
       <div class="card-head">
-        <div class="card-title">① Upload Job Description</div>
+        <div class="card-title"><span class="eyebrow" style="display:inline; margin-right:6px;">Step 1</span> Upload job description</div>
         <div class="card-sub">PDF · DOCX · TXT</div>
       </div>
       <label class="drop" id="jd-drop">
         <input type="file" name="jd_file" id="jd-file" accept=".pdf,.docx,.txt" required>
-        <div class="drop-ico">📋</div>
+        <div class="drop-ico">{{ icon('clipboard', 'ico-svg sm') }} </div>
         <div class="drop-title">Drop the JD here</div>
         <div class="drop-sub">or click to browse</div>
         <div class="drop-chip" id="jd-chip"></div>
@@ -36,31 +37,28 @@
     </div>
 
     <div class="card">
-      <div class="card-title">② Describe what you're hiring for <span style="font-weight:400;color:var(--muted);font-size:12px;">(optional but improves accuracy)</span></div>
+      <label class="card-title" for="jda-desc" style="display:block;"><span class="eyebrow" style="display:inline; margin-right:6px;">Step 2</span> Describe who you're hiring <span class="opt" style="font-weight:500;color:var(--muted);font-size:12px;">(optional, improves accuracy)</span></label>
       <textarea name="description" id="jda-desc"
         placeholder="e.g. We need a mid-level Python backend engineer with 2-4 years experience in Django and AWS, for a fintech startup. The role involves building REST APIs and data pipelines."
-        style="width:100%; height:160px; border:1px solid var(--border); border-radius:10px; padding:12px;
-               font-family:inherit; font-size:13px; line-height:1.6; resize:vertical;
-               background:var(--soft); color:var(--text);"
-      ></textarea>
+        class="input" style="height:160px; line-height:1.6; resize:vertical;"></textarea>
       <p class="muted" style="margin-top:8px; font-size:12px;">The more context you give, the more accurate the keyword gap and seniority analysis will be.</p>
     </div>
   </div>
 
-  <button type="submit" class="primary-btn" id="run-btn">🔬 Analyse JD</button>
+  <button type="submit" class="primary-btn" id="run-btn">{{ icon('flask', 'ico-svg sm') }} Analyse JD</button>
 </form>
 
 <div class="info-row" style="margin-top:28px;">
   <div class="info-card">
-    <div class="info-ico g1">📊</div>
+    <div class="info-ico g1">{{ icon('chart', 'ico-svg sm') }} </div>
     <div><strong>6-dimension scoring</strong><p>Clarity, Completeness, Keywords, Role Definition, Attractiveness, Seniority Alignment.</p></div>
   </div>
   <div class="info-card">
-    <div class="info-ico g2">🔑</div>
+    <div class="info-ico g2">{{ icon('key', 'ico-svg sm') }} </div>
     <div><strong>Keyword gap detection</strong><p>Finds domain keywords that strong candidates search for but your JD is missing.</p></div>
   </div>
   <div class="info-card">
-    <div class="info-ico g3">✨</div>
+    <div class="info-ico g3">{{ icon('sparkle', 'ico-svg sm') }} </div>
     <div><strong>One-click JD fix</strong><p>Claude rewrites your JD using only your existing content — no fabrication, just improvement.</p></div>
   </div>
 </div>
@@ -87,7 +85,7 @@
 </div>
 
 {# ── Big score + radar ── #}
-<div style="display:grid; grid-template-columns:200px 1fr; gap:22px; margin-bottom:22px; align-items:start;">
+<div class="grid-2" style="grid-template-columns:minmax(0,220px) minmax(0,1fr); align-items:start;">
 
   {# Overall score orb #}
   <div class="card" style="text-align:center; padding:28px 16px;">
@@ -107,12 +105,12 @@
       <canvas id="radar-chart" width="220" height="220" style="flex-shrink:0;"></canvas>
       <div style="flex:1; min-width:220px; display:flex; flex-direction:column; gap:10px;">
         {% set dim_labels = [
-          ('Clarity',            s['clarity'],            '#6366f1'),
-          ('Completeness',       s['completeness'],       '#06b6d4'),
-          ('Keyword Richness',   s['keyword_richness'],   '#10b981'),
-          ('Role Definition',    s['role_definition'],    '#f59e0b'),
-          ('Attractiveness',     s['attractiveness'],     '#ec4899'),
-          ('Seniority Align',    s['seniority_alignment'],'#8b5cf6'),
+          ('Clarity',            s['clarity'],            'var(--accent)'),
+          ('Completeness',       s['completeness'],       'var(--info)'),
+          ('Keyword Richness',   s['keyword_richness'],   'var(--good)'),
+          ('Role Definition',    s['role_definition'],    'var(--warn)'),
+          ('Attractiveness',     s['attractiveness'],     'var(--accent)'),
+          ('Seniority Align',    s['seniority_alignment'],'var(--accent)'),
         ] %}
         {% for label, val, color in dim_labels %}
         <div style="display:flex; align-items:center; gap:10px; font-size:13px;">
@@ -129,13 +127,13 @@
 </div>
 
 {# ── Issues / Strengths / Suggestions ── #}
-<div style="display:grid; grid-template-columns:1fr 1fr 1fr; gap:16px; margin-bottom:22px;">
+<div class="grid-3">
 
-  <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:12px; padding:18px;">
-    <div style="font-weight:700; color:#dc2626; font-size:14px; margin-bottom:12px;">
-      ✗ {{ analysis['issues']|length }} Issues Found
+  <div style="background:var(--bad-bg); border:1px solid var(--bad-border); border-radius:12px; padding:18px;">
+    <div style="font-weight:700; color:var(--bad); font-size:14px; margin-bottom:12px;">
+      {{ icon('x-circle', 'ico-svg sm') }} {{ analysis['issues']|length }} Issues Found
     </div>
-    <ul style="margin:0; padding-left:18px; font-size:13px; color:#991b1b; line-height:1.7;">
+    <ul style="margin:0; padding-left:18px; font-size:13px; color:var(--bad-text); line-height:1.7;">
       {% for item in analysis['issues'] %}
       <li>{{ item }}</li>
       {% else %}
@@ -144,11 +142,11 @@
     </ul>
   </div>
 
-  <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:12px; padding:18px;">
-    <div style="font-weight:700; color:#16a34a; font-size:14px; margin-bottom:12px;">
-      ✓ {{ analysis['strengths']|length }} Strengths
+  <div style="background:var(--good-bg); border:1px solid var(--good-border); border-radius:12px; padding:18px;">
+    <div style="font-weight:700; color:var(--good); font-size:14px; margin-bottom:12px;">
+      {{ icon('check-circle', 'ico-svg sm') }} {{ analysis['strengths']|length }} Strengths
     </div>
-    <ul style="margin:0; padding-left:18px; font-size:13px; color:#166534; line-height:1.7;">
+    <ul style="margin:0; padding-left:18px; font-size:13px; color:var(--good-text); line-height:1.7;">
       {% for item in analysis['strengths'] %}
       <li>{{ item }}</li>
       {% else %}
@@ -157,11 +155,11 @@
     </ul>
   </div>
 
-  <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:12px; padding:18px;">
-    <div style="font-weight:700; color:#b45309; font-size:14px; margin-bottom:12px;">
-      💡 {{ analysis['suggestions']|length }} Suggestions
+  <div style="background:var(--warn-bg); border:1px solid var(--warn-border); border-radius:12px; padding:18px;">
+    <div style="font-weight:700; color:var(--warn); font-size:14px; margin-bottom:12px;">
+      {{ icon('sparkle', 'ico-svg sm') }} {{ analysis['suggestions']|length }} Suggestions
     </div>
-    <ol style="margin:0; padding-left:18px; font-size:13px; color:#78350f; line-height:1.7;">
+    <ol style="margin:0; padding-left:18px; font-size:13px; color:var(--warn-text); line-height:1.7;">
       {% for item in analysis['suggestions'] %}
       <li>{{ item }}</li>
       {% else %}
@@ -186,14 +184,14 @@
 <div class="card" style="margin-bottom:22px; padding:16px 22px;">
   <div class="card-title small" style="margin-bottom:10px;">Missing Sections</div>
   <div class="kw-row">
-    {% for sec in analysis['missing_sections'] %}<span class="kw" style="background:#fef2f2; border-color:#fecaca; color:#dc2626;">{{ sec }}</span>{% endfor %}
+    {% for sec in analysis['missing_sections'] %}<span class="kw" style="background:var(--bad-bg); border-color:var(--bad-border); color:var(--bad-text);">{{ sec }}</span>{% endfor %}
   </div>
 </div>
 {% endif %}
 
 {# ── Fix JD CTA ── #}
-<div class="card" style="margin-bottom:22px; padding:28px; text-align:center; border:2px dashed #6366f1; background:#f5f3ff;">
-  <div style="font-size:32px; margin-bottom:10px;">✨</div>
+<div class="card" style="margin-bottom:22px; padding:28px; text-align:center; border:2px dashed var(--accent); background:var(--accent-soft);">
+  <div class="empty-ico" style="margin-bottom:12px;">{{ icon('sparkle') }}</div>
   <h3 style="font-size:18px; margin-bottom:8px;">Fix this JD with AI</h3>
   <p class="lede" style="margin:0 auto 18px; max-width:560px;">
     Claude will rewrite the JD using only your existing content — adding missing keywords, fixing issues,
@@ -206,14 +204,14 @@
   {% else %}
   <form action="{{ url_for('jd_fix', analysis_id=analysis['id']) }}" method="post" id="fix-form">
     <button type="submit" class="primary-btn" id="fix-btn" onclick="showFixOverlay()">
-      ✨ Generate Improved JD
+      {{ icon('sparkle', 'ico-svg sm') }} Generate Improved JD
     </button>
   </form>
   {% endif %}
 </div>
 
 <div class="actions-row">
-  <a class="ghost-btn big" href="{{ url_for('jd_analysis') }}">⬅ Analyse Another JD</a>
+  <a class="ghost-btn big" href="{{ url_for('jd_analysis') }}">{{ icon('arrow-left', 'ico-svg sm') }} Analyse another JD</a>
 </div>
 {% endif %}
 
@@ -222,39 +220,12 @@
   <div class="loading-box">
     <div class="loading-spinner"></div>
     <h2 id="overlay-title">Analysing JD…</h2>
-    <p class="lede" id="overlay-msg">Screen Genie Engine is evaluating your Job Description across 6 quality dimensions.</p>
+    <p class="loading-stage" id="overlay-msg">Screen Genie Engine is evaluating your Job Description across 6 quality dimensions.</p>
     <div class="loading-bar-wrap"><div class="loading-bar-fill"></div></div>
-    <p class="muted" style="font-size:.8rem; margin-top:16px;">Keep this tab open — you'll be taken to results automatically.</p>
+    <p class="loading-hint">Keep this tab open. You'll be taken to the results automatically.</p>
   </div>
 </div>
 
-<style>
-.loading-overlay {
-  position:fixed; inset:0; background:rgba(15,17,23,.97);
-  z-index:9999; display:flex; align-items:center; justify-content:center;
-}
-.loading-overlay.hidden { display:none; }
-.loading-box {
-  text-align:center; max-width:480px; padding:48px 40px;
-  background:#1a1d2e; border-radius:20px; border:1px solid #2d2f45;
-}
-.loading-spinner {
-  width:56px; height:56px; border:4px solid #2d2f45;
-  border-top-color:#6366f1; border-radius:50%;
-  animation:spin 1s linear infinite; margin:0 auto 24px;
-}
-@keyframes spin { to { transform:rotate(360deg); } }
-.loading-bar-wrap { background:#2d2f45; border-radius:8px; height:8px; overflow:hidden; margin-top:20px; }
-.loading-bar-fill {
-  height:8px; background:#6366f1; border-radius:8px;
-  animation:indeterminate 1.8s ease-in-out infinite;
-}
-@keyframes indeterminate {
-  0%   { width:0%;  margin-left:0%; }
-  50%  { width:60%; margin-left:20%; }
-  100% { width:0%;  margin-left:100%; }
-}
-</style>
 
 <script>
 {% if not analysis %}
@@ -276,18 +247,21 @@ function showFixOverlay() {
 }
 
 {% if analysis %}
-// Draw radar chart
-(function() {
+// Draw radar chart (reads theme colours; redraws when the theme changes)
+function drawRadar() {
   const canvas = document.getElementById('radar-chart');
   if (!canvas) return;
   const ctx = canvas.getContext('2d');
-  const cx = 110, cy = 110, r = 85;
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  const css = getComputedStyle(document.documentElement);
+  const tok = name => css.getPropertyValue(name).trim();
+  const cx = 110, cy = 110, r = 68;
   const labels = ['Clarity','Completeness','Keywords','Role Def.','Attract.','Seniority'];
   const values = [
     {{ s['clarity'] }}, {{ s['completeness'] }}, {{ s['keyword_richness'] }},
     {{ s['role_definition'] }}, {{ s['attractiveness'] }}, {{ s['seniority_alignment'] }}
   ].map(v => v / 100);
-  const colors = ['#6366f1','#06b6d4','#10b981','#f59e0b','#ec4899','#8b5cf6'];
+  const colors = ['--accent','--info','--good','--warn','--accent','--accent'].map(tok);
   const n = labels.length;
   const step = (Math.PI * 2) / n;
 
@@ -297,7 +271,7 @@ function showFixOverlay() {
   }
 
   // Grid rings
-  ctx.strokeStyle = '#e5e7eb';
+  ctx.strokeStyle = tok('--border');
   ctx.lineWidth = 1;
   [0.25, 0.5, 0.75, 1].forEach(frac => {
     ctx.beginPath();
@@ -315,7 +289,7 @@ function showFixOverlay() {
     ctx.moveTo(cx, cy);
     const [x, y] = pt(i, 1);
     ctx.lineTo(x, y);
-    ctx.strokeStyle = '#e5e7eb';
+    ctx.strokeStyle = tok('--border');
     ctx.stroke();
   }
 
@@ -326,9 +300,11 @@ function showFixOverlay() {
     i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
   });
   ctx.closePath();
-  ctx.fillStyle = 'rgba(99,102,241,0.18)';
+  ctx.globalAlpha = 0.18;
+  ctx.fillStyle = tok('--accent');
   ctx.fill();
-  ctx.strokeStyle = '#6366f1';
+  ctx.globalAlpha = 1;
+  ctx.strokeStyle = tok('--accent');
   ctx.lineWidth = 2;
   ctx.stroke();
 
@@ -342,14 +318,16 @@ function showFixOverlay() {
   });
 
   // Labels
-  ctx.font = '11px Helvetica, Arial, sans-serif';
-  ctx.fillStyle = '#6b7280';
+  ctx.font = '600 11px Manrope, system-ui, sans-serif';
+  ctx.fillStyle = tok('--muted');
   ctx.textAlign = 'center';
   labels.forEach((lbl, i) => {
     const [x, y] = pt(i, 1.22);
     ctx.fillText(lbl, x, y);
   });
-})();
+}
+drawRadar();
+new MutationObserver(drawRadar).observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] });
 {% endif %}
 </script>
 {% endblock %}

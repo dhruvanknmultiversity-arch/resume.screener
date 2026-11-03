@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_icons.html' import icon %}
 {% set active = 'bulk' %}
 {% block title %}Screening…{% endblock %}
 {% block content %}
@@ -46,7 +47,7 @@
 </div>
 
 <div class="card scan-error hidden" id="error-card">
-  <h3>⚠ Something went wrong</h3>
+  <h3>{{ icon('alert', 'ico-svg sm') }} Something went wrong</h3>
   <p id="error-msg" class="muted"></p>
   <a class="primary-btn" href="{{ url_for('index') }}">← Back to Upload</a>
 </div>
