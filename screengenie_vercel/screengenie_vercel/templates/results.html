@@ -33,12 +33,21 @@
   <div class="stat-tile"><span class="l">Average score</span><span class="v">{{ scan['avg_score'] }}%</span></div>
 </section>
 
+{% if criteria %}
+<div class="card kw-card">
+  <div class="card-title small">Requirements checked for every resume</div>
+  <div class="crit-chips">
+    {% for c in criteria %}<span class="crit-chip {{ c['kind'] }}"><span class="k">{{ {'must': 'Must', 'nice': 'Nice', 'knockout': 'Knockout'}[c['kind']] }}</span>{{ c['label'] }}{% if c['min_years'] %} · {{ '%g'|format(c['min_years']) }}+ yrs{% endif %}</span>{% endfor %}
+  </div>
+</div>
+{% else %}
 <div class="card kw-card">
   <div class="card-title small">Keywords taken from the job description</div>
   <div class="kw-row">
     {% for kw in keywords %}<span class="kw">{{ kw }}</span>{% endfor %}
   </div>
 </div>
+{% endif %}
 
 <div class="card table-card">
   <div style="padding:16px 18px 2px;">
@@ -78,7 +87,7 @@
         <th>#</th>
         <th>Candidate</th>
         <th>Score</th>
-        <th>Skills</th>
+        <th>{{ 'Must-haves' if criteria else 'Skills' }}</th>
         <th>Contact</th>
         <th>Status</th>
         <th><span class="sr-only">Actions</span></th>
@@ -96,7 +105,7 @@
             <span class="avatar" aria-hidden="true">{{ (parts[0][:1] ~ (parts[-1][:1] if parts|length > 1 else ''))|upper }}</span>
             <div style="min-width:0;">
               <div class="cand-name"><a href="{{ url_for('candidate_detail', candidate_id=c['id']) }}">{{ c['name'] }}</a></div>
-              <div class="cand-file" title="{{ c['filename'] }}">{{ c['filename'] }}</div>
+              <div class="cand-file" title="{{ c['filename'] }}">{{ c['current_title'] or c['filename'] }}{% if c['experience_months'] is not none and c['must_total'] %} · {{ '%.1f'|format(c['experience_months'] / 12) }} yrs work{% endif %}</div>
             </div>
           </div>
         </td>
@@ -108,8 +117,16 @@
           </div>
         </td>
         <td>
+          {% if c['must_total'] %}
+          <div class="must-cell">
+            <div class="kw-line"><span class="kw-num">{{ c['must_met'] }}</span> of {{ c['must_total'] }} met</div>
+            <div class="must-dots" aria-hidden="true">{% for i in range(c['must_total']) %}<span class="{{ 'on' if i < c['must_met'] }}"></span>{% endfor %}</div>
+            {% if c['knockout_failed'] %}<span class="ko-flag">{{ icon('alert', 'ico-svg sm') }} Fails a knockout</span>{% endif %}
+          </div>
+          {% else %}
           <div class="kw-line"><span class="kw-num">{{ c['matched_skills']|length }}</span> of {{ c['matched_skills']|length + c['missing_skills']|length }} skills</div>
           <div class="kw-mini" title="{{ c['matched_skills']|join(', ') }}">{{ c['matched_skills'][:5]|join(', ') }}{% if c['matched_skills']|length > 5 %}…{% endif %}</div>
+          {% endif %}
         </td>
         <td>
           <div class="meta copyable cand-file" style="max-width:200px;" title="Click to copy" data-copy="{{ c['email'] }}">{{ c['email'] }}</div>

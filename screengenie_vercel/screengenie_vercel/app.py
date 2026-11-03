@@ -32,6 +32,7 @@ from parsing import (
     analyze_jd_quality_with_claude,
     fix_jd_with_claude,
 )
+import engine
 
 from auth import init_auth
 
@@ -234,6 +235,16 @@ def init_db():
     cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS claude_count INTEGER DEFAULT 0")
     cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS session_name TEXT")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS cand_years INTEGER")
+    # Engine v2: requirement checklist per scan, evidence per candidate
+    cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS criteria TEXT")
+    cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS engine_version TEXT")
+    cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS criteria_results TEXT")
+    cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS experience_months INTEGER")
+    cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS internship_months INTEGER")
+    cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS knockout_failed BOOLEAN DEFAULT FALSE")
+    cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS must_met INTEGER")
+    cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS must_total INTEGER")
+    cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS current_title TEXT")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS jd_analyses (
             id SERIAL PRIMARY KEY,
@@ -295,8 +306,8 @@ def index():
 # to /results/<scan_id> automatically.
 # ---------------------------------------------------------------------------
 
-def process_resume_doc(jd_text, keywords, filename, text, raw):
-    """Score a single resume. Returns (candidate_dict, used_claude)."""
+def _legacy_candidate(jd_text, keywords, filename, text, raw):
+    """Pre-v2 path, used only when a scan has no requirement checklist."""
     claude_result = analyze_resume_with_claude(jd_text, text, keywords)
     used_claude = claude_result is not None
     analysis = claude_result or analyze_resume(jd_text, text, keywords)
@@ -326,13 +337,83 @@ def process_resume_doc(jd_text, keywords, filename, text, raw):
     }, used_claude
 
 
+def process_resume_doc(jd_text, keywords, filename, text, raw, criteria=None):
+    """Score one resume. Returns (candidate_dict, used_ai)."""
+    if not criteria:
+        return _legacy_candidate(jd_text, keywords, filename, text, raw)
+
+    rule = analyze_resume(jd_text, text, keywords)          # contact, keywords, format checks
+    contact = rule["contact"]
+    ev = engine.evaluate_resume(jd_text, criteria, text, name=contact["name"])
+    results = ev["results"]
+    by_verdict = lambda v: [r["label"] for r in results if r["verdict"] == v]
+
+    score = ev["score"]
+    status = "Reject" if ev["knockouts_failed"] else status_for_score(score)
+    work_years = ev["experience"]["work"] / 12.0
+    need_years = max([c.get("min_years") or 0 for c in criteria] or [0])
+    exp_score = (min(100, round(100 * work_years / need_years)) if need_years
+                 else rule["section_scores"]["experience"])
+    must_pct = round(100 * ev["must_met"] / ev["must_total"]) if ev["must_total"] else score
+    section_scores = dict(rule["section_scores"], skills=must_pct, experience=exp_score)
+
+    reasons = [f"Does not meet a knockout requirement: {k}." for k in ev["knockouts_failed"]]
+    reasons += ev.get("summary") or []
+    if not ev.get("summary"):
+        met, part, miss = by_verdict("met"), by_verdict("partial"), by_verdict("not_met")
+        if met:
+            reasons.append("Shows " + ", ".join(met[:5]) + ".")
+        if part:
+            reasons.append("Partly shows " + ", ".join(part[:4]) + ".")
+        if miss:
+            reasons.append("No evidence found for " + ", ".join(miss[:4]) + ".")
+    questions = ev.get("interview_questions") or [
+        f"Ask for a concrete example of: {r['label']}." for r in results
+        if r["kind"] in ("must", "knockout") and r["verdict"] != "met"][:4]
+
+    label_set = {r["label"].lower() for r in results}
+    extra = [sk for sk in (ev.get("skills") or rule["extra_skills"]) if sk.lower() not in label_set][:20]
+
+    return {
+        "filename": filename,
+        "name": contact["name"],
+        "email": contact["email"],
+        "phone": contact["phone"],
+        "score": score,
+        "grade": grade_for_score(score),
+        "status": status,
+        "section_scores": section_scores,
+        "matched_keywords": rule["matched_keywords"],
+        "missing_keywords": rule["missing_keywords"],
+        "matched_skills": by_verdict("met"),
+        "missing_skills": by_verdict("not_met"),
+        "extra_skills": extra,
+        "reasons": reasons,
+        "suggestions": questions,
+        "passed_checks": rule.get("passed_checks", []),
+        "warning_checks": rule.get("warning_checks", []) + (ev.get("red_flags") or []),
+        "issue_checks": rule.get("issue_checks", []),
+        "semantic_score": rule.get("semantic_score", 0),
+        "cand_years": int(round(work_years)),
+        "criteria_results": results,
+        "experience_months": ev["experience"]["work"],
+        "internship_months": ev["experience"]["internship"],
+        "knockout_failed": bool(ev["knockouts_failed"]),
+        "must_met": ev["must_met"],
+        "must_total": ev["must_total"],
+        "current_title": ev.get("current_title") or None,
+        "raw": raw,
+    }, ev["engine"] == "ai"
+
+
 def insert_candidate(cur, scan_id, c):
     cur.execute(
         "INSERT INTO candidates (scan_id, filename, name, email, phone, score, grade, status, "
         "section_scores, matched_keywords, missing_keywords, matched_skills, missing_skills, "
         "extra_skills, reasons, file_data, suggestions, passed_checks, warning_checks, "
-        "issue_checks, semantic_score, cand_years) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        "issue_checks, semantic_score, cand_years, criteria_results, experience_months, "
+        "internship_months, knockout_failed, must_met, must_total, current_title) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         (scan_id, c["filename"], c["name"], c["email"], c["phone"], c["score"], c["grade"],
          c["status"], json.dumps(c["section_scores"]), json.dumps(c["matched_keywords"]),
          json.dumps(c["missing_keywords"]), json.dumps(c["matched_skills"]),
@@ -340,8 +421,25 @@ def insert_candidate(cur, scan_id, c):
          json.dumps(c["reasons"]), c["raw"],
          json.dumps(c["suggestions"]), json.dumps(c["passed_checks"]),
          json.dumps(c["warning_checks"]), json.dumps(c["issue_checks"]),
-         c["semantic_score"], c.get("cand_years")),
+         c["semantic_score"], c.get("cand_years"),
+         json.dumps(c["criteria_results"]) if c.get("criteria_results") is not None else None,
+         c.get("experience_months"), c.get("internship_months"), bool(c.get("knockout_failed")),
+         c.get("must_met"), c.get("must_total"), c.get("current_title")),
     )
+
+
+@app.route("/requisition/draft", methods=["POST"])
+def requisition_draft():
+    """Turn an uploaded JD into an editable requirement checklist."""
+    jd_file = request.files.get("jd_file")
+    if not jd_file or jd_file.filename == "":
+        return jsonify({"error": "Please upload a job description file."}), 400
+    jd_text = extract_text_from_file(jd_file.filename, jd_file.stream)
+    if not jd_text.strip():
+        return jsonify({"error": "Could not read text from the job description file."}), 400
+    draft = engine.draft_requisition(jd_text, request.form.get("context", ""))
+    draft["role_title"] = draft.get("role_title") or guess_role(jd_text, jd_file.filename)
+    return jsonify(draft)
 
 
 # ---------------------------------------------------------------------------
@@ -366,17 +464,25 @@ def scan_start():
         return jsonify({"error": "Could not read text from the job description file."}), 400
 
     keywords = top_keywords(jd_text, n=15)
-    jd_role = guess_role(jd_text, jd_file.filename)
     session_name = (request.form.get("session_name") or "").strip()[:120] or None
+    # The recruiter's reviewed checklist; drafted here if the browser sent none.
+    criteria = engine.parse_criteria_json(request.form.get("criteria_json"))
+    role_title = (request.form.get("role_title") or "").strip()[:120]
+    if not criteria:
+        draft = engine.draft_requisition(jd_text)
+        criteria = draft["criteria"]
+        role_title = role_title or draft.get("role_title", "")
+    jd_role = role_title or guess_role(jd_text, jd_file.filename)
 
     db = get_db()
     cur = db.cursor()
     cur.execute(
         "INSERT INTO scans (jd_filename, jd_role, keywords, resume_count, avg_score, "
-        "created_at, jd_text, status, claude_count, session_name) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
+        "created_at, jd_text, status, claude_count, session_name, criteria, engine_version) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) RETURNING id",
         (jd_file.filename, jd_role, json.dumps(keywords), 0, 0,
-         datetime.utcnow().isoformat(), jd_text, "pending", 0, session_name),
+         datetime.utcnow().isoformat(), jd_text, "pending", 0, session_name,
+         json.dumps(criteria) if criteria else None, engine.ENGINE_VERSION),
     )
     scan_id = cur.fetchone()[0]
     db.commit()
@@ -388,7 +494,7 @@ def scan_start():
 def scan_batch(scan_id):
     db = get_db()
     cur = db.cursor()
-    cur.execute("SELECT jd_text, keywords, resume_count FROM scans WHERE id = %s", (scan_id,))
+    cur.execute("SELECT jd_text, keywords, resume_count, criteria FROM scans WHERE id = %s", (scan_id,))
     row = fetchone_dict(cur)
     if not row or not row["jd_text"]:
         return jsonify({"error": "Scan not found."}), 404
@@ -397,6 +503,7 @@ def scan_batch(scan_id):
         return jsonify({"processed": 0, "skipped": 0, "capped": True})
     jd_text = row["jd_text"]
     keywords = json.loads(row["keywords"])
+    criteria = json.loads(row["criteria"]) if row.get("criteria") else None
 
     files = [f for f in request.files.getlist("resume_files") if f and f.filename]
     docs = []
@@ -409,7 +516,7 @@ def scan_batch(scan_id):
     processed, claude_in_batch = 0, 0
     if docs:
         with concurrent.futures.ThreadPoolExecutor(max_workers=min(8, len(docs))) as pool:
-            futures = [pool.submit(process_resume_doc, jd_text, keywords, n, t, r)
+            futures = [pool.submit(process_resume_doc, jd_text, keywords, n, t, r, criteria)
                        for n, t, r in docs]
             for fut in concurrent.futures.as_completed(futures):
                 cand, used_claude = fut.result()
@@ -451,7 +558,7 @@ def scan_finalize(scan_id):
         return jsonify({"error": "No readable resumes were found (check formats: PDF, DOCX, TXT)."}), 400
 
     claude_count = row["claude_count"] or 0
-    engine = "Screen Genie Engine" if claude_count >= max(1, total // 2) else "Rule-based"
+    engine_label = "Screen Genie Engine" if claude_count >= max(1, total // 2) else "Rule-based"
     try:
         started = datetime.fromisoformat(row["created_at"])
         duration = round((datetime.utcnow() - started).total_seconds(), 1)
@@ -461,7 +568,7 @@ def scan_finalize(scan_id):
     cur.execute(
         "UPDATE scans SET avg_score = %s, engine = %s, duration_seconds = %s, status = 'done' "
         "WHERE id = %s",
-        (float(row["avg"]), engine, duration, scan_id),
+        (float(row["avg"]), engine_label, duration, scan_id),
     )
     db.commit()
     cur.close()
@@ -506,13 +613,14 @@ def scan():
         return redirect(url_for("index"))
 
     keywords = top_keywords(jd_text, n=15)
-    jd_role = guess_role(jd_text, jd_file.filename)
     session_name = (request.form.get("session_name") or "").strip()[:120] or None
+    criteria = engine.parse_criteria_json(request.form.get("criteria_json")) or engine.draft_requisition(jd_text)["criteria"]
+    jd_role = (request.form.get("role_title") or "").strip()[:120] or guess_role(jd_text, jd_file.filename)
     start = time.time()
 
     candidates, claude_count = [], 0
     with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
-        futures = [pool.submit(process_resume_doc, jd_text, keywords, n, t, r)
+        futures = [pool.submit(process_resume_doc, jd_text, keywords, n, t, r, criteria)
                    for n, t, r in resume_docs]
         for fut in concurrent.futures.as_completed(futures):
             cand, used_claude = fut.result()
@@ -523,16 +631,17 @@ def scan():
     candidates.sort(key=lambda c: (c["score"], c.get("semantic_score", 0)), reverse=True)
     avg_score = round(sum(c["score"] for c in candidates) / len(candidates), 1)
     duration = round(time.time() - start, 1)
-    engine = "Screen Genie Engine" if claude_count >= max(1, len(candidates) // 2) else "Rule-based"
+    engine_label = "Screen Genie Engine" if claude_count >= max(1, len(candidates) // 2) else "Rule-based"
 
     db = get_db()
     cur = db.cursor()
     cur.execute(
         "INSERT INTO scans (jd_filename, jd_role, keywords, resume_count, avg_score, "
-        "created_at, duration_seconds, engine, status, session_name) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'done',%s) RETURNING id",
+        "created_at, duration_seconds, engine, status, session_name, criteria, engine_version) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,'done',%s,%s,%s) RETURNING id",
         (jd_file.filename, jd_role, json.dumps(keywords), len(candidates), avg_score,
-         datetime.utcnow().isoformat(), duration, engine, session_name),
+         datetime.utcnow().isoformat(), duration, engine_label, session_name,
+         json.dumps(criteria) if criteria else None, engine.ENGINE_VERSION),
     )
     scan_id = cur.fetchone()[0]
     for c in candidates:
@@ -548,7 +657,7 @@ def results(scan_id):
     cur = db.cursor()
     cur.execute(
         "SELECT id, jd_filename, jd_role, keywords, resume_count, avg_score, created_at, "
-        "duration_seconds, engine, session_name FROM scans WHERE id = %s",
+        "duration_seconds, engine, session_name, criteria FROM scans WHERE id = %s",
         (scan_id,),
     )
     scan_row = fetchone_dict(cur)
@@ -558,7 +667,8 @@ def results(scan_id):
 
     cur.execute(
         "SELECT id, scan_id, filename, name, email, phone, score, grade, status, "
-        "section_scores, matched_skills, missing_skills FROM candidates "
+        "section_scores, matched_skills, missing_skills, must_met, must_total, knockout_failed, "
+        "experience_months, current_title FROM candidates "
         "WHERE scan_id = %s ORDER BY score DESC, COALESCE(semantic_score,0) DESC, id ASC",
         (scan_id,),
     )
@@ -573,7 +683,9 @@ def results(scan_id):
         candidates.append(c)
 
     keywords = json.loads(scan_row["keywords"])
-    return render_template("results.html", scan=scan_row, candidates=candidates, keywords=keywords)
+    criteria = json.loads(scan_row["criteria"]) if scan_row.get("criteria") else []
+    return render_template("results.html", scan=scan_row, candidates=candidates, keywords=keywords,
+                           criteria=criteria)
 
 
 def _priority_for(status, score):
@@ -740,7 +852,9 @@ def candidate_detail(candidate_id):
         "SELECT id, scan_id, filename, name, email, phone, score, grade, status, "
         "section_scores, matched_keywords, missing_keywords, matched_skills, missing_skills, "
         "extra_skills, reasons, suggestions, passed_checks, warning_checks, issue_checks, "
-        "semantic_score, (file_data IS NOT NULL) AS has_file FROM candidates WHERE id = %s",
+        "semantic_score, cand_years, criteria_results, experience_months, internship_months, "
+        "knockout_failed, must_met, must_total, current_title, "
+        "(file_data IS NOT NULL) AS has_file FROM candidates WHERE id = %s",
         (candidate_id,),
     )
     row = fetchone_dict(cur)
@@ -760,6 +874,7 @@ def candidate_detail(candidate_id):
     candidate["passed_checks"] = json.loads(candidate["passed_checks"]) if candidate["passed_checks"] else []
     candidate["warning_checks"] = json.loads(candidate["warning_checks"]) if candidate["warning_checks"] else []
     candidate["issue_checks"] = json.loads(candidate["issue_checks"]) if candidate["issue_checks"] else []
+    candidate["criteria_results"] = json.loads(candidate["criteria_results"]) if candidate.get("criteria_results") else []
 
     cur.execute("SELECT id, jd_filename, jd_role, keywords, resume_count, avg_score, created_at, session_name FROM scans WHERE id = %s", (candidate["scan_id"],))
     scan_row = fetchone_dict(cur)
