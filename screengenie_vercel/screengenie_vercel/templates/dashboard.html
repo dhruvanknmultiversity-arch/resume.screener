@@ -58,8 +58,8 @@
 
   <div class="card">
     <div class="card-title">Grade Mix</div>
-    {% set gmax = [grade_counts['A'],grade_counts['B'],grade_counts['C'],grade_counts['D'],1]|max %}
-    {% for g in ['A','B','C','D'] %}
+    {% set gmax = [grade_counts['A'],grade_counts['B'],grade_counts['C'],grade_counts['D'],grade_counts['F'],1]|max %}
+    {% for g in ['A','B','C','D','F'] %}
     <div class="bd-row">
       <div class="bd-label">Grade {{ g }}</div>
       <div class="bd-bar"><div class="bd-fill g-{{ g }}" style="width:{{ (grade_counts[g]/gmax)*100 }}%"></div></div>
