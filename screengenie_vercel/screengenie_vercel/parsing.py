@@ -73,6 +73,10 @@ fresher freshers experience pune mumbai delhi bangalore bengaluru hyderabad chen
 gurgaon noida onsite offline remote hybrid india office hours time mode work-from
 multiversity nuverse intern internship trainee fresher fulltime full-time part-time
 contract permanent
+teamwork collaboration collaborative projects project solutions solution generative
+healthcare documentation communication passionate passion motivated self-motivated
+hardworking hard-working dynamic excellent strong good ability abilities attitude
+learn learning willing eager detail-oriented problem solving problem-solving skills
 """.split())
 
 ALL_NOISE = STOPWORDS | NOISE_TERMS
@@ -567,32 +571,48 @@ def required_years(jd_text):
     return max(matches) if matches else None
 
 
+_EDU_LINE_RE = re.compile(
+    r"\b(b\.?\s?tech|b\.?\s?e\.?|m\.?\s?tech|bca|mca|mba|bba|b\.?\s?sc|m\.?\s?sc|b\.?\s?com|m\.?\s?com|"
+    r"ph\.?\s?d|bachelor|master|degree|diploma|university|college|school|institute|academy|cgpa|gpa|"
+    r"percentage|hsc|ssc|10th|12th|class\s+x|graduat\w*|semesters?|coursework|courses?|certifications?|"
+    r"certificates?|education|projects?|capstone|thesis|hackathons?)\b", re.I)
+_EXPLICIT_EXP_RE = re.compile(
+    r"(\d{1,2}(?:\.\d)?)\s*\+?\s*(?:years|yrs|year)\s+(?:of\s+)?(?:[a-z/&\-]+\s+){0,3}?(?:experience|exp)\b", re.I)
+_INTERN_RE = re.compile(r"\b(intern|internship|trainee|apprentice)\b", re.I)
+
+
+def rule_experience_months(resume_text, today=None):
+    """Union of dated employment ranges, in months. Lines that look like
+    education, courses or projects are ignored; internships counted apart."""
+    from engine import experience_months
+    roles = []
+    lines = resume_text.splitlines()
+    for i, line in enumerate(lines):
+        for m in DATE_RANGE_RE.finditer(line):
+            context = " ".join(lines[max(0, i - 1): i + 2])
+            if _EDU_LINE_RE.search(line) or (_EDU_LINE_RE.search(context) and not re.search(
+                    r"\b(engineer|developer|analyst|manager|executive|associate|consultant|intern|lead|officer|"
+                    r"specialist|designer|scientist|support|administrator|assistant)\b", context, re.I)):
+                continue
+            start = ((m.group(1) or "") + " " + m.group(2)).strip()
+            end = ((m.group(3) or "") + " " + m.group(4)).strip()
+            roles.append({"start": start, "end": end, "is_internship": bool(_INTERN_RE.search(context))})
+    return experience_months(roles, today)
+
+
 def candidate_years(resume_text):
-    """Estimate years of experience from the resume.
-
-    Strategy: take the larger of (highest "X years" statement, sum of date
-    ranges in employment history). Falls back to None if neither is found.
-    """
-    text_years = [int(m.group(1)) for m in YEARS_RE.finditer(resume_text)]
-    explicit = max(text_years) if text_years else 0
-
-    current_year = datetime.utcnow().year
-    range_total = 0
-    for m in DATE_RANGE_RE.finditer(resume_text):
-        start = int(m.group(2))
-        end_str = m.group(4).lower() if m.group(4) else ""
-        if end_str.isdigit():
-            end = int(end_str)
-        elif end_str in ("present", "current", "now"):
-            end = current_year
-        else:
-            continue
-        if 1980 < start <= end <= current_year + 1:
-            range_total += max(0, end - start)
-
-    if range_total == 0 and explicit == 0:
-        return None
-    return max(range_total, explicit)
+    """Years of work experience: dated job ranges (overlaps counted once,
+    education and internships excluded), or an explicit "N years of
+    experience" statement when no dates are given."""
+    exp = rule_experience_months(resume_text)
+    if exp["work"]:
+        return int(round(exp["work"] / 12.0))
+    stated = [float(m.group(1)) for m in _EXPLICIT_EXP_RE.finditer(resume_text)]
+    if stated:
+        return int(round(max(stated)))
+    if exp["internship"]:
+        return 0
+    return None
 
 
 # ----------------------------------------------------------------------

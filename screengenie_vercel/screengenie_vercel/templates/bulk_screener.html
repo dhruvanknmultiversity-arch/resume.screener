@@ -76,6 +76,25 @@
     </div>
   </div>
 
+  <section class="card req-card" id="req-card" aria-labelledby="req-title">
+    <div class="card-head">
+      <div>
+        <h2 class="card-title" id="req-title" style="margin:0;"><span class="eyebrow" style="display:inline; margin-right:6px;">Step 3</span> Review requirements</h2>
+        <p class="card-sub" style="margin-top:4px;">Every resume is checked against this list. Must-haves weigh most; a failed knockout is flagged.</p>
+      </div>
+      <span class="engine-badge ai hidden" id="req-engine">{{ icon('sparkle', 'ico-svg sm') }} Drafted from your JD</span>
+    </div>
+    <div class="req-empty" id="req-empty">{{ icon('file', 'ico-svg sm') }} Add a job description in step 1 and the checklist appears here.</div>
+    <div class="req-loading hidden" id="req-loading"><span class="spinner"></span> Reading the job description…</div>
+    <div class="hidden" id="req-body">
+      <label class="field-label" for="role-title">Role title</label>
+      <input class="input" id="role-title" maxlength="120" placeholder="e.g. AI/ML Intern">
+      <div class="req-head" aria-hidden="true"><span>Type</span><span>Requirement</span><span>Importance</span><span>Min. years</span><span></span></div>
+      <div id="req-list" class="req-list"></div>
+      <button type="button" class="ghost-btn sm" id="req-add" style="margin-top:12px;">+ Add requirement</button>
+    </div>
+  </section>
+
   <div class="form-msg hidden" id="form-msg"></div>
   {# type="button" — NEVER a native submit, so the browser can never POST all
      files to /scan in one shot (which caused the 413). All uploads go through
@@ -123,7 +142,61 @@ segBtns.forEach(b => b.addEventListener('click', () => {
 document.getElementById('jd-file').addEventListener('change', e => {
   const f = e.target.files[0];
   document.getElementById('jd-chip').textContent = f ? f.name : '';
+  if (f) draftRequirements(f);
 });
+
+// ── Requirement checklist (step 3) ──
+const reqList = document.getElementById('req-list');
+const KIND_LABEL = { must: 'Must-have', nice: 'Nice-to-have', knockout: 'Knockout' };
+function escAttr(v) { return String(v).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;'); }
+function addReqRow(c) {
+  c = Object.assign({ label: '', kind: 'must', weight: 2, min_years: 0 }, c || {});
+  const row = document.createElement('div');
+  row.className = 'req-row';
+  row.innerHTML =
+    `<select class="input req-kind" aria-label="Requirement type">` +
+      Object.keys(KIND_LABEL).map(k => `<option value="${k}"${k === c.kind ? ' selected' : ''}>${KIND_LABEL[k]}</option>`).join('') +
+    `</select>` +
+    `<input class="input req-label" aria-label="Requirement" maxlength="140" placeholder="e.g. Python for machine learning" value="${escAttr(c.label)}">` +
+    `<select class="input req-weight" aria-label="Importance">` +
+      [[3, 'High'], [2, 'Medium'], [1, 'Low']].map(([v, t]) => `<option value="${v}"${v == c.weight ? ' selected' : ''}>${t}</option>`).join('') +
+    `</select>` +
+    `<input class="input req-years" type="number" min="0" max="30" step="0.5" aria-label="Minimum years" value="${c.min_years || ''}" placeholder="—">` +
+    `<button type="button" class="ghost-btn sm icon-btn req-del" aria-label="Remove requirement">✕</button>`;
+  row.querySelector('.req-del').addEventListener('click', () => row.remove());
+  reqList.appendChild(row);
+}
+document.getElementById('req-add').addEventListener('click', () => { addReqRow(); reqList.lastChild.querySelector('.req-label').focus(); });
+function collectCriteria() {
+  return Array.from(reqList.querySelectorAll('.req-row')).map(r => ({
+    label: r.querySelector('.req-label').value.trim(),
+    kind: r.querySelector('.req-kind').value,
+    weight: parseInt(r.querySelector('.req-weight').value, 10),
+    min_years: parseFloat(r.querySelector('.req-years').value) || 0,
+  })).filter(c => c.label);
+}
+async function draftRequirements(file) {
+  const show = id => ['req-empty', 'req-loading', 'req-body'].forEach(x => document.getElementById(x).classList.toggle('hidden', x !== id));
+  show('req-loading');
+  document.getElementById('req-engine').classList.add('hidden');
+  try {
+    const fd = new FormData(); fd.append('jd_file', file);
+    const res = await fetch("{{ url_for('requisition_draft') }}", { method: 'POST', body: fd });
+    const data = await readJson(res);
+    if (!res.ok) throw new Error(data.error || 'Could not read the job description.');
+    reqList.innerHTML = '';
+    (data.criteria || []).forEach(addReqRow);
+    if (!(data.criteria || []).length) addReqRow();
+    document.getElementById('role-title').value = data.role_title || '';
+    document.getElementById('req-engine').classList.toggle('hidden', data.engine !== 'ai');
+  } catch (err) {
+    reqList.innerHTML = ''; addReqRow();
+    const msg = document.getElementById('form-msg');
+    msg.textContent = err.message + ' You can type the requirements yourself.';
+    msg.classList.remove('hidden');
+  }
+  show('req-body');
+}
 const MAX_RESUMES = 50;
 
 // Rough time estimate: resumes run in parallel chunks; ~15s per chunk.
@@ -269,6 +342,8 @@ async function runScan(jdFile, mode) {
     const startFd = new FormData();
     startFd.append('jd_file', jdFile);
     startFd.append('session_name', (document.getElementById('session-name').value || '').trim());
+    startFd.append('criteria_json', JSON.stringify(collectCriteria()));
+    startFd.append('role_title', (document.getElementById('role-title').value || '').trim());
     const startRes = await fetch("{{ url_for('scan_start') }}", { method: 'POST', body: startFd });
     const startData = await readJson(startRes);
     if (!startRes.ok) throw new Error(startData.error || httpMsg(startRes, 'Could not start scan.'));

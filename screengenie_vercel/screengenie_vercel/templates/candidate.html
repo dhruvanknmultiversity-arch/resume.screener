@@ -56,11 +56,20 @@
 {% set total_kw = candidate['matched_keywords']|length + candidate['missing_keywords']|length %}
 {% set kw_pct = ((candidate['matched_keywords']|length / total_kw * 100)|round(0)|int) if total_kw > 0 else 0 %}
 {% set total_sk = candidate['matched_skills']|length + candidate['missing_skills']|length %}
+{% set v2 = candidate['criteria_results']|length > 0 %}
+{% macro yrs(months) -%}{% if months is none %}—{% elif months < 12 %}{{ months }} mo{% else %}{{ '%.1f'|format(months / 12) }} yrs{% endif %}{%- endmacro %}
 <section class="grid-4" aria-label="Key numbers">
+  {% if v2 %}
+  <div class="stat-tile accent"><span class="l">Must-haves met</span><span class="v">{{ candidate['must_met'] }}<span class="muted" style="font-size:16px; font-weight:700;"> / {{ candidate['must_total'] }}</span></span></div>
+  <div class="stat-tile"><span class="l">Work experience (from dates)</span><span class="v">{{ yrs(candidate['experience_months']) }}</span></div>
+  <div class="stat-tile"><span class="l">Internships</span><span class="v">{{ yrs(candidate['internship_months']) if candidate['internship_months'] else '—' }}</span></div>
+  <div class="stat-tile"><span class="l">JD keywords covered</span><span class="v">{{ kw_pct }}%</span></div>
+  {% else %}
   <div class="stat-tile accent"><span class="l">Skills matched</span><span class="v">{{ candidate['matched_skills']|length }}<span class="muted" style="font-size:16px; font-weight:700;"> / {{ total_sk }}</span></span></div>
   <div class="stat-tile"><span class="l">JD keywords covered</span><span class="v">{{ kw_pct }}%</span></div>
   <div class="stat-tile"><span class="l">Keywords missing</span><span class="v">{{ candidate['missing_keywords']|length }}</span></div>
   <div class="stat-tile"><span class="l">Resume-to-JD similarity</span><span class="v">{{ candidate['semantic_score'] if candidate['semantic_score'] is not none else '—' }}{% if candidate['semantic_score'] is not none %}%{% endif %}</span></div>
+  {% endif %}
 </section>
 
 {# ── Why ── #}
@@ -74,6 +83,30 @@
     {% endfor %}
   </div>
 </section>
+
+{# ── Requirement check with evidence (engine v2) ── #}
+{% if v2 %}
+<section class="card" style="margin-bottom:20px;" aria-labelledby="req-check-title">
+  <div class="card-head">
+    <h2 id="req-check-title" class="card-title" style="margin:0;">Requirement check</h2>
+    {% if candidate['knockout_failed'] %}<span class="ko-flag">{{ icon('alert', 'ico-svg sm') }} Fails a knockout requirement</span>{% endif %}
+  </div>
+  <div class="crit-list">
+    {% for r in candidate['criteria_results'] %}
+    <div class="crit-row">
+      <div><span class="verdict {{ r['verdict'] }}">{{ {'met': 'Met', 'partial': 'Partial', 'not_met': 'Not met'}[r['verdict']] }}</span></div>
+      <div>
+        <div class="crit-title">{{ r['label'] }}
+          <span class="kind-tag {{ r['kind'] }}">{{ {'must': 'Must-have', 'nice': 'Nice-to-have', 'knockout': 'Knockout'}[r['kind']] }}{% if r['min_years'] %} · {{ '%g'|format(r['min_years']) }}+ yrs{% endif %}</span>
+        </div>
+        {% if r['reason'] %}<div class="crit-reason">{{ r['reason'] }}</div>{% endif %}
+        {% if r['evidence'] %}<div class="quote">“{{ r['evidence'] }}”</div>{% endif %}
+      </div>
+    </div>
+    {% endfor %}
+  </div>
+</section>
+{% endif %}
 
 {# ── Section scores ── #}
 <div class="card-head" style="margin-bottom:12px;">
