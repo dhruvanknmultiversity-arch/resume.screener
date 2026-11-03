@@ -37,6 +37,7 @@ from auth import init_auth
 
 app = Flask(__name__)
 app.config["MAX_CONTENT_LENGTH"] = 60 * 1024 * 1024  # 60 MB
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 3600  # static CSS/icons; bust with ?v=N
 # Access gate: must be registered before any other before_request hook.
 init_auth(app)
 

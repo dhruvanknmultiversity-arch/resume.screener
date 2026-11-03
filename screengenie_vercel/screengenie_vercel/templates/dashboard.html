@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_icons.html' import icon %}
 {% set active = 'dashboard' %}
 {% block title %}Dashboard{% endblock %}
 {% block content %}
@@ -11,25 +12,14 @@
 </div>
 
 {# ── Tab switcher (same style as History) ── #}
-<div style="display:flex; gap:0; margin-bottom:22px; border-bottom:2px solid var(--border);">
+<div class="tabs" role="tablist">
   <button class="tab-btn active" id="tab-screening" onclick="switchTab('screening')">
-    ⚡ Resume Screening
+    {{ icon('bolt', 'ico-svg sm') }} Resume Screening
   </button>
   <button class="tab-btn" id="tab-jd" onclick="switchTab('jd')">
-    🔬 JD Analysis
+    {{ icon('flask', 'ico-svg sm') }} JD Analysis
   </button>
 </div>
-
-<style>
-.tab-btn {
-  background: none; border: none; padding: 10px 22px 12px;
-  font-size: 14px; font-weight: 600; color: var(--muted);
-  cursor: pointer; border-bottom: 3px solid transparent;
-  margin-bottom: -2px; transition: .15s; display: inline-flex; align-items: center; gap: 8px;
-}
-.tab-btn.active { color: var(--text); border-bottom-color: #6366f1; }
-.tab-btn:hover:not(.active) { color: var(--text); }
-</style>
 
 {# ══════════════════════════════════════════════════════════
    Tab 1: Resume Screening
@@ -37,10 +27,10 @@
 <div id="panel-screening">
 
 <div class="kpi-grid">
-  <div class="kpi card"><div class="kpi-ico b1">📄</div><div><div class="kpi-label">Resumes Screened</div><div class="kpi-val">{{ total_resumes }}</div></div></div>
-  <div class="kpi card"><div class="kpi-ico b2">✅</div><div><div class="kpi-label">Shortlisted</div><div class="kpi-val">{{ shortlisted }}</div></div></div>
-  <div class="kpi card"><div class="kpi-ico b3">📊</div><div><div class="kpi-label">Average Score</div><div class="kpi-val">{{ avg_score }}%</div></div></div>
-  <div class="kpi card"><div class="kpi-ico b4">⚡</div><div><div class="kpi-label">Bulk Scans</div><div class="kpi-val">{{ total_scans }}</div></div></div>
+  <div class="kpi card"><div class="kpi-ico b1">{{ icon('file') }}</div><div><div class="kpi-label">Resumes Screened</div><div class="kpi-val">{{ total_resumes }}</div></div></div>
+  <div class="kpi card"><div class="kpi-ico b2">{{ icon('check-circle') }}</div><div><div class="kpi-label">Shortlisted</div><div class="kpi-val">{{ shortlisted }}</div></div></div>
+  <div class="kpi card"><div class="kpi-ico b3">{{ icon('chart') }}</div><div><div class="kpi-label">Average Score</div><div class="kpi-val">{{ avg_score }}%</div></div></div>
+  <div class="kpi card"><div class="kpi-ico b4">{{ icon('bolt') }}</div><div><div class="kpi-label">Bulk Scans</div><div class="kpi-val">{{ total_scans }}</div></div></div>
 </div>
 
 <div class="grid-2">
@@ -109,10 +99,10 @@
 <div id="panel-jd" style="display:none;">
 
 <div class="kpi-grid">
-  <div class="kpi card"><div class="kpi-ico b1">🔬</div><div><div class="kpi-label">JDs Analysed</div><div class="kpi-val">{{ jd_stats['total_jds'] }}</div></div></div>
-  <div class="kpi card"><div class="kpi-ico b3">📊</div><div><div class="kpi-label">Avg JD Quality</div><div class="kpi-val">{{ jd_stats['avg_jd_score'] }}%</div></div></div>
-  <div class="kpi card"><div class="kpi-ico b2">🏆</div><div><div class="kpi-label">Excellent JDs</div><div class="kpi-val">{{ jd_stats['excellent_jds'] }}</div></div></div>
-  <div class="kpi card"><div class="kpi-ico b4">✨</div><div><div class="kpi-label">JDs Improved</div><div class="kpi-val">{{ jd_stats['jds_improved'] }}</div></div></div>
+  <div class="kpi card"><div class="kpi-ico b1">{{ icon('flask') }}</div><div><div class="kpi-label">JDs Analysed</div><div class="kpi-val">{{ jd_stats['total_jds'] }}</div></div></div>
+  <div class="kpi card"><div class="kpi-ico b3">{{ icon('chart') }}</div><div><div class="kpi-label">Avg JD Quality</div><div class="kpi-val">{{ jd_stats['avg_jd_score'] }}%</div></div></div>
+  <div class="kpi card"><div class="kpi-ico b2">{{ icon('trend') }}</div><div><div class="kpi-label">Excellent JDs</div><div class="kpi-val">{{ jd_stats['excellent_jds'] }}</div></div></div>
+  <div class="kpi card"><div class="kpi-ico b4">{{ icon('sparkle') }}</div><div><div class="kpi-label">JDs Improved</div><div class="kpi-val">{{ jd_stats['jds_improved'] }}</div></div></div>
 </div>
 
 <div class="grid-2">

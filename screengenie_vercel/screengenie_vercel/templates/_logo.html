@@ -1,0 +1,53 @@
+<svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" aria-label="Multiversity">
+  <defs>
+    <linearGradient id="goldgrad{{ uid|default('') }}" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#e8be5e"/>
+      <stop offset="1" stop-color="#c8932f"/>
+    </linearGradient>
+  </defs>
+  {# ── Monogram: twin intertwined loops + side stroke ── #}
+  <g fill="none" stroke="url(#goldgrad{{ uid|default('') }})" stroke-width="2" stroke-linecap="round">
+    <path d="M46 12 C40 24, 40 38, 49 49"/>
+    <path d="M54 12 C60 24, 60 38, 51 49"/>
+    <path d="M49 14 C46 26, 47 40, 50 50"/>
+    <path d="M51 14 C54 26, 53 40, 50 50"/>
+    <path d="M61 30 C61 38, 60 44, 58 49"/>
+    <line x1="63" y1="27" x2="63" y2="33"/>
+  </g>
+  {# ── Radial seed fan ── #}
+  <g fill="url(#goldgrad{{ uid|default('') }})">
+    <ellipse cx="45.5" cy="55.8" rx="2.51" ry="4.18" transform="rotate(-30 45.5 55.8)"/>
+    <ellipse cx="50.0" cy="57.0" rx="2.51" ry="4.18" transform="rotate(0 50.0 57.0)"/>
+    <ellipse cx="54.5" cy="55.8" rx="2.51" ry="4.18" transform="rotate(30 54.5 55.8)"/>
+    <ellipse cx="38.2" cy="58.8" rx="2.40" ry="4.00" transform="rotate(-48 38.2 58.8)"/>
+    <ellipse cx="43.6" cy="62.6" rx="2.40" ry="4.00" transform="rotate(-24 43.6 62.6)"/>
+    <ellipse cx="50.0" cy="64.0" rx="2.40" ry="4.00" transform="rotate(0 50.0 64.0)"/>
+    <ellipse cx="56.4" cy="62.6" rx="2.40" ry="4.00" transform="rotate(24 56.4 62.6)"/>
+    <ellipse cx="61.8" cy="58.8" rx="2.40" ry="4.00" transform="rotate(48 61.8 58.8)"/>
+    <ellipse cx="30.1" cy="59.5" rx="2.29" ry="3.83" transform="rotate(-60 30.1 59.5)"/>
+    <ellipse cx="35.2" cy="65.6" rx="2.29" ry="3.83" transform="rotate(-40 35.2 65.6)"/>
+    <ellipse cx="42.1" cy="69.6" rx="2.29" ry="3.83" transform="rotate(-20 42.1 69.6)"/>
+    <ellipse cx="50.0" cy="71.0" rx="2.29" ry="3.83" transform="rotate(0 50.0 71.0)"/>
+    <ellipse cx="57.9" cy="69.6" rx="2.29" ry="3.83" transform="rotate(20 57.9 69.6)"/>
+    <ellipse cx="64.8" cy="65.6" rx="2.29" ry="3.83" transform="rotate(40 64.8 65.6)"/>
+    <ellipse cx="69.9" cy="59.5" rx="2.29" ry="3.83" transform="rotate(60 69.9 59.5)"/>
+    <ellipse cx="22.3" cy="59.5" rx="2.19" ry="3.65" transform="rotate(-68 22.3 59.5)"/>
+    <ellipse cx="26.8" cy="67.0" rx="2.19" ry="3.65" transform="rotate(-51 26.8 67.0)"/>
+    <ellipse cx="33.3" cy="72.9" rx="2.19" ry="3.65" transform="rotate(-34 33.3 72.9)"/>
+    <ellipse cx="41.3" cy="76.7" rx="2.19" ry="3.65" transform="rotate(-17 41.3 76.7)"/>
+    <ellipse cx="50.0" cy="78.0" rx="2.19" ry="3.65" transform="rotate(0 50.0 78.0)"/>
+    <ellipse cx="58.7" cy="76.7" rx="2.19" ry="3.65" transform="rotate(17 58.7 76.7)"/>
+    <ellipse cx="66.7" cy="72.9" rx="2.19" ry="3.65" transform="rotate(34 66.7 72.9)"/>
+    <ellipse cx="73.2" cy="67.0" rx="2.19" ry="3.65" transform="rotate(51 73.2 67.0)"/>
+    <ellipse cx="77.7" cy="59.5" rx="2.19" ry="3.65" transform="rotate(68 77.7 59.5)"/>
+    <ellipse cx="15.2" cy="60.7" rx="2.09" ry="3.48" transform="rotate(-70 15.2 60.7)"/>
+    <ellipse cx="20.6" cy="70.5" rx="2.09" ry="3.48" transform="rotate(-52 20.6 70.5)"/>
+    <ellipse cx="28.8" cy="78.3" rx="2.09" ry="3.48" transform="rotate(-35 28.8 78.3)"/>
+    <ellipse cx="38.9" cy="83.3" rx="2.09" ry="3.48" transform="rotate(-18 38.9 83.3)"/>
+    <ellipse cx="50.0" cy="85.0" rx="2.09" ry="3.48" transform="rotate(0 50.0 85.0)"/>
+    <ellipse cx="61.1" cy="83.3" rx="2.09" ry="3.48" transform="rotate(18 61.1 83.3)"/>
+    <ellipse cx="71.2" cy="78.3" rx="2.09" ry="3.48" transform="rotate(35 71.2 78.3)"/>
+    <ellipse cx="79.4" cy="70.5" rx="2.09" ry="3.48" transform="rotate(52 79.4 70.5)"/>
+    <ellipse cx="84.8" cy="60.7" rx="2.09" ry="3.48" transform="rotate(70 84.8 60.7)"/>
+  </g>
+</svg>

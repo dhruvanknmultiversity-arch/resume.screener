@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_icons.html' import icon %}
 {% set active = 'bulk' %}
 {% set show_back = true %}
 {% block title %}{{ candidate['name'] }}{% endblock %}
@@ -6,6 +7,9 @@
 {% macro label(score) -%}
   {%- if score >= 75 -%}strong{%- elif score >= 50 -%}moderate{%- else -%}weak{%- endif -%}
 {%- endmacro %}
+{% set parts = (candidate['name'] or '?').split() %}
+{% set band = 'high' if candidate['score']>=70 else ('mid' if candidate['score']>=45 else 'low') %}
+{% set status_line = {'Shortlist': 'Why this candidate is shortlisted', 'Review': 'Why this candidate needs a review', 'Reject': 'Why this candidate was not shortlisted'} %}
 
 <div class="crumbs">
   <a href="{{ url_for('index') }}">Bulk Screener</a> ·
@@ -13,291 +17,156 @@
   {{ candidate['name'] }}
 </div>
 
-{% if scan and scan['session_name'] %}
-<div style="display:inline-flex; align-items:center; gap:8px; background:#ede9fe; border:1px solid #c4b5fd;
-     color:#5b21b6; font-weight:700; font-size:13px; padding:6px 14px; border-radius:999px; margin-bottom:10px;">
-  🏷️ {{ scan['session_name'] }}
-</div>
-{% endif %}
+{% if scan and scan['session_name'] %}<span class="session-tag">{{ icon('tag', 'ico-svg sm') }} {{ scan['session_name'] }}</span>{% endif %}
 
-{# ── Prev / next navigation ── #}
 <div class="cand-nav">
-  {% if prev_id %}<a class="ghost-btn" href="{{ url_for('candidate_detail', candidate_id=prev_id) }}">← Prev</a>
-  {% else %}<span class="ghost-btn disabled">← Prev</span>{% endif %}
+  {% if prev_id %}<a class="ghost-btn sm" href="{{ url_for('candidate_detail', candidate_id=prev_id) }}">{{ icon('arrow-left', 'ico-svg sm') }} Previous</a>
+  {% else %}<span class="ghost-btn sm disabled">{{ icon('arrow-left', 'ico-svg sm') }} Previous</span>{% endif %}
   <span class="cand-nav-pos">Candidate {{ rank }} of {{ total }}</span>
-  {% if next_id %}<a class="ghost-btn" href="{{ url_for('candidate_detail', candidate_id=next_id) }}">Next →</a>
-  {% else %}<span class="ghost-btn disabled">Next →</span>{% endif %}
+  {% if next_id %}<a class="ghost-btn sm" href="{{ url_for('candidate_detail', candidate_id=next_id) }}">Next {{ icon('arrow-right', 'ico-svg sm') }}</a>
+  {% else %}<span class="ghost-btn sm disabled">Next {{ icon('arrow-right', 'ico-svg sm') }}</span>{% endif %}
 </div>
 
-{# ── Header card ── #}
-<div class="cand-head card" style="display:flex; align-items:flex-start; gap:20px; flex-wrap:wrap;">
-  <div style="display:flex; align-items:center; gap:16px; flex:1; min-width:260px;">
-    <div class="cand-avatar" style="flex-shrink:0;">{{ candidate['name'][:1] }}</div>
-    <div class="cand-info">
-      <h1 style="margin:0 0 4px;">{{ candidate['name'] }}</h1>
-      <div class="cand-meta-row">
-        <span class="copyable" title="Click to copy" data-copy="{{ candidate['email'] }}">{{ candidate['email'] }}</span>
-        <span class="copyable" title="Click to copy" data-copy="{{ candidate['phone'] }}">{{ candidate['phone'] }}</span>
-        <span>{{ candidate['filename'] }}</span>
-      </div>
+{# ── Header ── #}
+<section class="card cand-head" aria-label="Candidate summary">
+  <span class="avatar lg" aria-hidden="true">{{ (parts[0][:1] ~ (parts[-1][:1] if parts|length > 1 else ''))|upper }}</span>
+  <div class="cand-info">
+    <h1>{{ candidate['name'] }}</h1>
+    <div class="cand-meta-row">
+      <span class="copyable" title="Click to copy" data-copy="{{ candidate['email'] }}">{{ candidate['email'] }}</span>
+      <span class="copyable" title="Click to copy" data-copy="{{ candidate['phone'] }}">{{ candidate['phone'] }}</span>
+      <span>{{ candidate['filename'] }}</span>
     </div>
-  </div>
-  <div style="display:flex; flex-direction:column; align-items:flex-end; gap:10px; flex-shrink:0;">
-    <div style="display:flex; gap:8px;">
-      <a class="ghost-btn" href="{{ url_for('candidate_view_file', candidate_id=candidate['id']) }}" target="_blank">View Resume</a>
-      <a class="ghost-btn" href="{{ url_for('candidate_download_file', candidate_id=candidate['id']) }}">Download Resume</a>
-    </div>
-    <div class="cand-tags" style="margin:0; justify-content:flex-end;">
-      <span class="grade g-{{ candidate['grade'] }}">Grade {{ candidate['grade'] }}</span>
+    <div class="cand-tags">
       <span class="pill p-{{ candidate['status']|lower }}">{{ candidate['status'] }}</span>
-      {% if scan %}<span class="pill p-jd">JD: {{ scan['jd_role'] }}</span>{% endif %}
+      <span class="grade g-{{ candidate['grade'] }}">Grade {{ candidate['grade'] }}</span>
+      {% if scan %}<span class="pill p-jd">{{ scan['jd_role'] }}</span>{% endif %}
     </div>
   </div>
-</div>
-
-{# ── Audit row ── #}
-<div style="display:grid; grid-template-columns:repeat(3,1fr); gap:14px; margin-bottom:20px;">
-
-  <div style="background:#f0fdf4; border:1px solid #bbf7d0; border-radius:10px; padding:14px 16px;">
-    <div style="font-weight:700; color:#16a34a; font-size:1.05rem; margin-bottom:6px;">
-      ✓ {{ candidate['passed_checks']|length }} Passed
+  <div class="cand-side">
+    <div class="big-orb {{ band }}" role="img" aria-label="Overall score {{ candidate['score'] }} out of 100">{{ candidate['score'] }}<span>SCORE</span></div>
+    <div class="cand-files">
+      <a class="ghost-btn sm" href="{{ url_for('candidate_view_file', candidate_id=candidate['id']) }}" target="_blank" rel="noopener">{{ icon('eye', 'ico-svg sm') }} View resume</a>
+      <a class="ghost-btn sm" href="{{ url_for('candidate_download_file', candidate_id=candidate['id']) }}">{{ icon('download', 'ico-svg sm') }} Download</a>
     </div>
-    <details>
-      <summary style="cursor:pointer; font-size:0.85rem; color:#15803d;">Show details</summary>
-      <ul style="margin:8px 0 0; padding-left:18px; font-size:0.85rem; color:#166534;">
-        {% for item in candidate['passed_checks'] %}
-        <li>{{ item }}</li>
-        {% else %}
-        <li>No items.</li>
-        {% endfor %}
-      </ul>
-    </details>
   </div>
+</section>
 
-  <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:10px; padding:14px 16px;">
-    <div style="font-weight:700; color:#b45309; font-size:1.05rem; margin-bottom:6px;">
-      ⚠ {{ candidate['warning_checks']|length }} Warnings
-    </div>
-    <details>
-      <summary style="cursor:pointer; font-size:0.85rem; color:#92400e;">Show details</summary>
-      <ul style="margin:8px 0 0; padding-left:18px; font-size:0.85rem; color:#78350f;">
-        {% for item in candidate['warning_checks'] %}
-        <li>{{ item }}</li>
-        {% else %}
-        <li>No items.</li>
-        {% endfor %}
-      </ul>
-    </details>
-  </div>
-
-  <div style="background:#fef2f2; border:1px solid #fecaca; border-radius:10px; padding:14px 16px;">
-    <div style="font-weight:700; color:#dc2626; font-size:1.05rem; margin-bottom:6px;">
-      ✗ {{ candidate['issue_checks']|length }} Issues
-    </div>
-    <details>
-      <summary style="cursor:pointer; font-size:0.85rem; color:#b91c1c;">Show details</summary>
-      <ul style="margin:8px 0 0; padding-left:18px; font-size:0.85rem; color:#991b1b;">
-        {% for item in candidate['issue_checks'] %}
-        <li>{{ item }}</li>
-        {% else %}
-        <li>No items.</li>
-        {% endfor %}
-      </ul>
-    </details>
-  </div>
-
-</div>
-
-{# ── Resume vs JD Match % ── #}
-<div class="card" style="margin-bottom:20px;">
-  <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
-    <div class="card-title" style="margin:0;">Resume vs JD Match</div>
-    <span style="font-weight:700; font-size:1.1rem; color:#2563eb;">{{ candidate['semantic_score'] }}%</span>
-  </div>
-  <div style="background:#e5e7eb; border-radius:999px; height:12px; overflow:hidden;">
-    <div style="height:100%; border-radius:999px; background:linear-gradient(90deg,#3b82f6,#2563eb); width:{{ candidate['semantic_score'] }}%; transition:width 0.4s;"></div>
-  </div>
-</div>
-
-{# ── 4 mini-stat cards ── #}
+{# ── Key numbers ── #}
 {% set total_kw = candidate['matched_keywords']|length + candidate['missing_keywords']|length %}
 {% set kw_pct = ((candidate['matched_keywords']|length / total_kw * 100)|round(0)|int) if total_kw > 0 else 0 %}
-<div style="display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:22px;">
+{% set total_sk = candidate['matched_skills']|length + candidate['missing_skills']|length %}
+<section class="grid-4" aria-label="Key numbers">
+  <div class="stat-tile accent"><span class="l">Skills matched</span><span class="v">{{ candidate['matched_skills']|length }}<span class="muted" style="font-size:16px; font-weight:700;"> / {{ total_sk }}</span></span></div>
+  <div class="stat-tile"><span class="l">JD keywords covered</span><span class="v">{{ kw_pct }}%</span></div>
+  <div class="stat-tile"><span class="l">Keywords missing</span><span class="v">{{ candidate['missing_keywords']|length }}</span></div>
+  <div class="stat-tile"><span class="l">Resume-to-JD similarity</span><span class="v">{{ candidate['semantic_score'] if candidate['semantic_score'] is not none else '—' }}{% if candidate['semantic_score'] is not none %}%{% endif %}</span></div>
+</section>
 
-  <div class="card" style="text-align:center; padding:18px 10px;">
-    <div style="font-size:2.2rem; font-weight:800; color:#2563eb; line-height:1;">{{ candidate['grade'] }}</div>
-    <div style="font-size:0.8rem; color:#6b7280; margin-top:6px;">Score Grade</div>
+{# ── Why ── #}
+<section class="card" style="margin-bottom:20px;" aria-labelledby="why-title">
+  <h2 id="why-title" class="card-title">{{ status_line.get(candidate['status'], 'Why this result') }}</h2>
+  <div class="reason-list">
+    {% for r in candidate['reasons'] %}
+    <div class="reason-item"><span class="reason-ico">{{ icon('check-circle', 'ico-svg sm') }}</span><span>{{ r }}</span></div>
+    {% else %}
+    <p class="muted">No explanation was recorded for this scan.</p>
+    {% endfor %}
   </div>
-
-  <div class="card" style="text-align:center; padding:18px 10px;">
-    <div style="font-size:2rem; font-weight:800; color:#22c55e; line-height:1;">{{ kw_pct }}%</div>
-    <div style="font-size:0.8rem; color:#6b7280; margin-top:6px;">Keywords Covered</div>
-  </div>
-
-  <div class="card" style="text-align:center; padding:18px 10px;">
-    <div style="font-size:2rem; font-weight:800; color:#ef4444; line-height:1;">{{ candidate['missing_keywords']|length }}</div>
-    <div style="font-size:0.8rem; color:#6b7280; margin-top:6px;">Keywords Missing</div>
-  </div>
-
-  <div class="card" style="text-align:center; padding:18px 10px;">
-    <div style="font-size:2rem; font-weight:800; color:#f59e0b; line-height:1;">{{ candidate['suggestions']|length }}/10</div>
-    <div style="font-size:0.8rem; color:#6b7280; margin-top:6px;">AI Suggestions</div>
-  </div>
-
-</div>
+</section>
 
 {# ── Section scores ── #}
-<div class="card-title" style="margin-bottom:14px;">Section Scores
-  <span class="hint" title="Each score is 0–100. Skills = JD skills the resume shows · Keywords = JD terms present · Experience = years &amp; relevance · Education = qualification match · Format = ATS structure · Contact = profile completeness.">ⓘ</span>
+<div class="card-head" style="margin-bottom:12px;">
+  <h2 class="card-title" style="margin:0;">Section scores
+    <span class="hint" title="Each score is 0–100. Skills = JD skills the resume shows · Keywords = JD terms present · Experience = years and relevance · Education = qualification match · Format = ATS structure · Contact = profile completeness.">{{ icon('info', 'ico-svg sm') }}</span>
+  </h2>
 </div>
+{% set sec = candidate['section_scores'] %}
+{% set sections = [
+  ('skills', 'Skills alignment', 'Skills found vs. skills the JD asks for'),
+  ('keywords', 'Keyword match', 'JD terms present in the resume'),
+  ('experience', 'Work experience', 'Relevance and depth vs. the JD'),
+  ('education', 'Education', 'Qualification match'),
+  ('format', 'Format and structure', 'Readable, ATS-friendly layout'),
+  ('contact', 'Contact and profile', 'Professional details present'),
+] %}
 <div class="section-grid">
-  {% set sec = candidate['section_scores'] %}
-
+  {% for key, title, sub in sections %}
+  {% set v = sec[key] if sec and sec[key] is not none else 0 %}
   <div class="card section-card">
     <div class="section-card-head">
       <div>
-        <div class="section-card-title">Skills Alignment</div>
-        <div class="section-card-sub">Skills found vs. skills required by JD</div>
+        <div class="section-card-title">{{ title }}</div>
+        <div class="section-card-sub">{{ sub }}</div>
       </div>
-      <span class="section-tag {{ label(sec['skills']) }}">{{ label(sec['skills'])|capitalize }}</span>
+      <span class="section-tag {{ label(v) }}">{{ label(v)|capitalize }}</span>
     </div>
     <div class="section-score-row">
-      <div class="section-bar"><div class="section-fill {{ label(sec['skills']) }}" style="width:{{ sec['skills'] }}%"></div></div>
-      <div class="section-val">{{ sec['skills'] }}</div>
+      <div class="section-bar"><div class="section-fill {{ label(v) }}" style="width:{{ v }}%"></div></div>
+      <div class="section-val">{{ v }}</div>
     </div>
   </div>
-
-  <div class="card section-card">
-    <div class="section-card-head">
-      <div>
-        <div class="section-card-title">Keyword Match</div>
-        <div class="section-card-sub">JD terms present in resume</div>
-      </div>
-      <span class="section-tag {{ label(sec['keywords']) }}">{{ label(sec['keywords'])|capitalize }}</span>
-    </div>
-    <div class="section-score-row">
-      <div class="section-bar"><div class="section-fill {{ label(sec['keywords']) }}" style="width:{{ sec['keywords'] }}%"></div></div>
-      <div class="section-val">{{ sec['keywords'] }}</div>
-    </div>
-  </div>
-
-  <div class="card section-card">
-    <div class="section-card-head">
-      <div>
-        <div class="section-card-title">Work Experience</div>
-        <div class="section-card-sub">Relevance &amp; depth vs. JD requirement</div>
-      </div>
-      <span class="section-tag {{ label(sec['experience']) }}">{{ label(sec['experience'])|capitalize }}</span>
-    </div>
-    <div class="section-score-row">
-      <div class="section-bar"><div class="section-fill {{ label(sec['experience']) }}" style="width:{{ sec['experience'] }}%"></div></div>
-      <div class="section-val">{{ sec['experience'] }}</div>
-    </div>
-  </div>
-
-  <div class="card section-card">
-    <div class="section-card-head">
-      <div>
-        <div class="section-card-title">Education</div>
-        <div class="section-card-sub">Qualification match</div>
-      </div>
-      <span class="section-tag {{ label(sec['education']) }}">{{ label(sec['education'])|capitalize }}</span>
-    </div>
-    <div class="section-score-row">
-      <div class="section-bar"><div class="section-fill {{ label(sec['education']) }}" style="width:{{ sec['education'] }}%"></div></div>
-      <div class="section-val">{{ sec['education'] }}</div>
-    </div>
-  </div>
-
-  <div class="card section-card">
-    <div class="section-card-head">
-      <div>
-        <div class="section-card-title">Format &amp; Structure</div>
-        <div class="section-card-sub">ATS compatibility</div>
-      </div>
-      <span class="section-tag {{ label(sec['format']) }}">{{ label(sec['format'])|capitalize }}</span>
-    </div>
-    <div class="section-score-row">
-      <div class="section-bar"><div class="section-fill {{ label(sec['format']) }}" style="width:{{ sec['format'] }}%"></div></div>
-      <div class="section-val">{{ sec['format'] }}</div>
-    </div>
-  </div>
-
-  <div class="card section-card">
-    <div class="section-card-head">
-      <div>
-        <div class="section-card-title">Contact &amp; Profile</div>
-        <div class="section-card-sub">Professional details</div>
-      </div>
-      <span class="section-tag {{ label(sec['contact']) }}">{{ label(sec['contact'])|capitalize }}</span>
-    </div>
-    <div class="section-score-row">
-      <div class="section-bar"><div class="section-fill {{ label(sec['contact']) }}" style="width:{{ sec['contact'] }}%"></div></div>
-      <div class="section-val">{{ sec['contact'] }}</div>
-    </div>
-  </div>
+  {% endfor %}
 </div>
 
-{# ── Skills + Keywords 2-col ── #}
+{# ── Skills + keywords ── #}
 <div class="grid-2">
-  <div class="card">
-    <div class="card-title small">Matched skills ({{ candidate['matched_skills']|length }})</div>
+  <section class="card">
+    <h2 class="card-title small">Matched skills ({{ candidate['matched_skills']|length }})</h2>
     <div class="kw-row">
       {% for s in candidate['matched_skills'] %}<span class="kw matched">{{ s }}</span>{% else %}<span class="muted">No direct skill matches found.</span>{% endfor %}
     </div>
-    <div class="card-title small" style="margin-top:18px;">Missing skills ({{ candidate['missing_skills']|length }})</div>
+    <h2 class="card-title small" style="margin-top:18px;">Missing skills ({{ candidate['missing_skills']|length }})</h2>
     <div class="kw-row">
-      {% for s in candidate['missing_skills'] %}<span class="kw missing">{{ s }}</span>{% else %}<span class="muted">None — full coverage.</span>{% endfor %}
+      {% for s in candidate['missing_skills'] %}<span class="kw missing">{{ s }}</span>{% else %}<span class="muted">None. Full coverage.</span>{% endfor %}
     </div>
     {% if candidate['extra_skills'] %}
-    <div class="card-title small" style="margin-top:18px;">Other skills on resume ({{ candidate['extra_skills']|length }})</div>
+    <h2 class="card-title small" style="margin-top:18px;">Other skills on the resume ({{ candidate['extra_skills']|length }})</h2>
     <div class="kw-row">
       {% for s in candidate['extra_skills'] %}<span class="kw extra">{{ s }}</span>{% endfor %}
     </div>
     {% endif %}
-  </div>
-
-  <div class="card">
-    <div class="card-title small">Matched JD keywords ({{ candidate['matched_keywords']|length }})</div>
+  </section>
+  <section class="card">
+    <h2 class="card-title small">Matched JD keywords ({{ candidate['matched_keywords']|length }})</h2>
     <div class="kw-row">
       {% for kw in candidate['matched_keywords'] %}<span class="kw matched">{{ kw }}</span>{% else %}<span class="muted">No matches.</span>{% endfor %}
     </div>
-    <div class="card-title small" style="margin-top:18px;">Missing JD keywords ({{ candidate['missing_keywords']|length }})</div>
+    <h2 class="card-title small" style="margin-top:18px;">Missing JD keywords ({{ candidate['missing_keywords']|length }})</h2>
     <div class="kw-row">
-      {% for kw in candidate['missing_keywords'] %}<span class="kw missing">{{ kw }}</span>{% else %}<span class="muted">None — full coverage.</span>{% endfor %}
+      {% for kw in candidate['missing_keywords'] %}<span class="kw missing">{{ kw }}</span>{% else %}<span class="muted">None. Full coverage.</span>{% endfor %}
     </div>
-  </div>
+  </section>
 </div>
 
-{# ── AI Suggestions ── #}
-{% if candidate['suggestions'] %}
-<div class="card" style="margin-bottom:22px;">
-  <div class="card-title">AI Suggestions</div>
-  <ol style="margin:0; padding-left:22px; line-height:1.8;">
-    {% for s in candidate['suggestions'] %}
-    <li style="margin-bottom:6px;">{{ s }}</li>
-    {% endfor %}
-  </ol>
+{# ── Resume checks ── #}
+<h2 class="card-title" style="margin-bottom:12px;">Resume checks</h2>
+<div class="grid-3">
+  {% for kind, cls, ico, one, many in [('passed_checks', 'ok', 'check-circle', 'Passed', 'Passed'), ('warning_checks', 'warn', 'alert', 'Warning', 'Warnings'), ('issue_checks', 'bad', 'x-circle', 'Issue', 'Issues')] %}
+  <div class="audit {{ cls }}">
+    <div class="audit-title">{{ icon(ico, 'ico-svg sm') }} {{ candidate[kind]|length }} {{ one if candidate[kind]|length == 1 else many }}</div>
+    <details>
+      <summary>Show details</summary>
+      <ul>
+        {% for item in candidate[kind] %}<li>{{ item }}</li>{% else %}<li>No items.</li>{% endfor %}
+      </ul>
+    </details>
+  </div>
+  {% endfor %}
 </div>
+
+{% if candidate['suggestions'] %}
+<section class="card" style="margin-bottom:20px;">
+  <h2 class="card-title">Gaps to probe in the interview</h2>
+  <ol class="num-list">
+    {% for s in candidate['suggestions'] %}<li>{{ s }}</li>{% endfor %}
+  </ol>
+</section>
 {% endif %}
 
-{# ── Reasons ── #}
-<div class="card" style="margin-bottom:22px;">
-  <div class="card-title">Why this candidate is {{ candidate['status'] }}d</div>
-  <div class="reason-list">
-    {% for r in candidate['reasons'] %}
-    <div class="reason-item">
-      <span class="reason-ico">•</span>
-      <span>{{ r }}</span>
-    </div>
-    {% endfor %}
-  </div>
-</div>
-
 <div class="actions-row">
-  <a class="primary-btn" href="{{ url_for('results', scan_id=candidate['scan_id']) }}">← Back to ranked list</a>
-  {% if prev_id %}<a class="ghost-btn big" href="{{ url_for('candidate_detail', candidate_id=prev_id) }}">← Prev candidate</a>{% endif %}
-  {% if next_id %}<a class="ghost-btn big" href="{{ url_for('candidate_detail', candidate_id=next_id) }}">Next candidate →</a>{% endif %}
+  <a class="primary-btn" href="{{ url_for('results', scan_id=candidate['scan_id']) }}">{{ icon('arrow-left', 'ico-svg sm') }} Back to ranked list</a>
+  {% if next_id %}<a class="ghost-btn big" href="{{ url_for('candidate_detail', candidate_id=next_id) }}">Next candidate {{ icon('arrow-right', 'ico-svg sm') }}</a>{% endif %}
 </div>
 
 <div class="toast hidden" id="toast"></div>

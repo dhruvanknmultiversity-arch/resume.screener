@@ -1,4 +1,5 @@
 {% extends 'base.html' %}
+{% from '_icons.html' import icon %}
 {% set active = 'history' %}
 {% set show_back = true %}
 {% block title %}History{% endblock %}
@@ -16,33 +17,16 @@
 </div>
 
 {# ── Tab switcher ── #}
-<div style="display:flex; gap:0; margin-bottom:22px; border-bottom:2px solid var(--border);">
+<div class="tabs" role="tablist">
   <button class="tab-btn active" id="tab-screening" onclick="switchTab('screening')">
-    ⚡ Resume Screening History
+    {{ icon('bolt', 'ico-svg sm') }} Resume Screening History
     <span class="tab-count">{{ scans|length }}</span>
   </button>
   <button class="tab-btn" id="tab-jd" onclick="switchTab('jd')">
-    🔬 JD Analysis History
+    {{ icon('flask', 'ico-svg sm') }} JD Analysis History
     <span class="tab-count">{{ jd_analyses|length }}</span>
   </button>
 </div>
-
-<style>
-.tab-btn {
-  background: none; border: none; padding: 10px 22px 12px;
-  font-size: 14px; font-weight: 600; color: var(--muted);
-  cursor: pointer; border-bottom: 3px solid transparent;
-  margin-bottom: -2px; transition: .15s; display: inline-flex; align-items: center; gap: 8px;
-}
-.tab-btn.active { color: var(--text); border-bottom-color: #6366f1; }
-.tab-btn:hover:not(.active) { color: var(--text); }
-.tab-count {
-  background: var(--soft); border: 1px solid var(--border);
-  border-radius: 999px; font-size: 11px; font-weight: 700;
-  padding: 2px 8px; color: var(--muted);
-}
-.tab-btn.active .tab-count { background: #ede9fe; border-color: #c4b5fd; color: #7c3aed; }
-</style>
 
 {# ══════════════════════════════════════════════════════════
    Tab 1: Resume Screening History
@@ -50,7 +34,7 @@
 <div id="panel-screening">
 {% if scans %}
 <div class="toolbar">
-  <input type="text" id="screening-search" class="toolbar-search" placeholder="🔍 Search by JD file or role…">
+  <input type="text" id="screening-search" class="toolbar-search" placeholder="Search by JD file or role">
   <span class="toolbar-count" id="screening-count"></span>
 </div>
 <div class="card table-card">
@@ -70,7 +54,7 @@
       {% for s in scans %}
       <tr class="scan-row" data-search="{{ (s['jd_filename'] ~ ' ' ~ (s['jd_role'] or '') ~ ' ' ~ (s['session_name'] or ''))|lower }}">
         <td>{{ s['created_at'][:10] }} <span class="muted">{{ s['created_at'][11:16] }}</span></td>
-        <td>{% if s['session_name'] %}<span style="display:inline-block; background:#ede9fe; border:1px solid #c4b5fd; color:#5b21b6; font-weight:700; font-size:11px; padding:3px 9px; border-radius:999px;">🏷️ {{ s['session_name'] }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{% if s['session_name'] %}<span class="session-tag sm">{{ icon('tag', 'ico-svg sm') }} {{ s['session_name'] }}</span>{% else %}<span class="muted">—</span>{% endif %}</td>
         <td><strong>{{ s['jd_filename'] }}</strong></td>
         <td class="muted">{{ s['jd_role'] }}</td>
         <td>{{ s['resume_count'] }}</td>
@@ -87,10 +71,10 @@
 </div>
 {% else %}
 <div class="empty card">
-  <div class="empty-ico">🕘</div>
+  <div class="empty-ico">{{ icon('clock') }}</div>
   <h3>No screenings yet</h3>
   <p>Run your first bulk screening to see it here.</p>
-  <a class="primary-btn" href="{{ url_for('index') }}">⚡ Start a Bulk Scan</a>
+  <a class="primary-btn" href="{{ url_for('index') }}">{{ icon('bolt', 'ico-svg sm') }} Start a Bulk Scan</a>
 </div>
 {% endif %}
 </div>
@@ -101,7 +85,7 @@
 <div id="panel-jd" style="display:none;">
 {% if jd_analyses %}
 <div class="toolbar">
-  <input type="text" id="jd-search" class="toolbar-search" placeholder="🔍 Search by filename or role…">
+  <input type="text" id="jd-search" class="toolbar-search" placeholder="Search by file name or role">
   <span class="toolbar-count" id="jd-count"></span>
 </div>
 <div class="card table-card">
@@ -136,10 +120,10 @@
 </div>
 {% else %}
 <div class="empty card">
-  <div class="empty-ico">🔬</div>
+  <div class="empty-ico">{{ icon('flask') }}</div>
   <h3>No JD analyses yet</h3>
   <p>Analyse a Job Description to see quality scores and improvements here.</p>
-  <a class="primary-btn" href="{{ url_for('jd_analysis') }}">🔬 Analyse a JD</a>
+  <a class="primary-btn" href="{{ url_for('jd_analysis') }}">{{ icon('flask', 'ico-svg sm') }} Analyse a JD</a>
 </div>
 {% endif %}
 </div>
@@ -147,13 +131,13 @@
 {# ── Shared delete modal ── #}
 <div class="modal-overlay hidden" id="delete-modal">
   <div class="modal" style="max-width:420px; text-align:center;">
-    <div style="font-size:40px; margin-bottom:12px;">🗑️</div>
+    <div class="empty-ico" style="background:var(--bad-bg); color:var(--bad-text);">{{ icon('trash') }}</div>
     <h3 style="margin-bottom:8px; font-size:18px;">Delete this record?</h3>
     <p class="muted" id="delete-modal-desc" style="margin-bottom:20px; font-size:13px;"></p>
     <div style="display:flex; gap:10px; justify-content:center;">
       <button type="button" class="ghost-btn" id="delete-cancel">Cancel</button>
       <form id="delete-form" method="post" style="display:inline">
-        <button type="submit" class="primary-btn" style="background:#d92d20;">Yes, delete</button>
+        <button type="submit" class="primary-btn danger">Yes, delete</button>
       </form>
     </div>
   </div>

@@ -1,127 +1,146 @@
 {% extends 'base.html' %}
+{% from '_icons.html' import icon %}
 {% set active = 'bulk' %}
 {% set show_back = true %}
 {% block title %}Results{% endblock %}
 {% block content %}
 <div class="crumbs"><a href="{{ url_for('index') }}">Bulk Screener</a> · Results</div>
+{% set n = candidates|length %}
+{% set shortlisted = candidates|selectattr('status', 'equalto', 'Shortlist')|list|length %}
+{% set reviewing = candidates|selectattr('status', 'equalto', 'Review')|list|length %}
 <div class="page-head">
   <div>
-    {% if scan['session_name'] %}
-    <div style="display:inline-flex; align-items:center; gap:8px; background:#ede9fe; border:1px solid #c4b5fd;
-         color:#5b21b6; font-weight:700; font-size:13px; padding:6px 14px; border-radius:999px; margin-bottom:10px;">
-      🏷️ {{ scan['session_name'] }}
-    </div>
-    {% endif %}
-    <h1>Ranked Candidates</h1>
-    <p class="lede"><strong>JD:</strong> {{ scan['jd_filename'] }} · <strong>Detected role:</strong> {{ scan['jd_role'] }}</p>
+    {% if scan['session_name'] %}<span class="session-tag">{{ icon('tag', 'ico-svg sm') }} {{ scan['session_name'] }}</span>{% endif %}
+    <div class="eyebrow">Ranked candidates · scanned {{ scan['created_at'][:10] }}</div>
+    <h1>{{ scan['jd_role'] or 'Ranked Candidates' }}</h1>
+    <p class="lede">Job description: <strong>{{ scan['jd_filename'] }}</strong></p>
     <div class="scan-meta">
       {% if scan['engine'] %}<span class="engine-badge {{ 'ai' if scan['engine']=='Screen Genie Engine' else 'rule' }}">
-        {{ '🤖 Powered by Screen Genie Engine' if scan['engine']=='Screen Genie Engine' else '⚙ Rule-based engine' }}</span>{% endif %}
-      <span class="muted">Scanned {{ scan['created_at'][:10] }} at {{ scan['created_at'][11:16] }}</span>
-      {% if scan['duration_seconds'] %}<span class="muted">· took
-        {% set d = scan['duration_seconds']|int %}
-        {% if d >= 60 %}{{ d // 60 }}m {{ d % 60 }}s{% else %}{{ d }}s{% endif %}</span>{% endif %}
+        {{ icon('cpu', 'ico-svg sm') }} {{ 'Screen Genie Engine' if scan['engine']=='Screen Genie Engine' else 'Rule-based engine' }}</span>{% endif %}
+      <span class="muted">Scanned at {{ scan['created_at'][11:16] }}{% if scan['duration_seconds'] %}{% set d = scan['duration_seconds']|int %} · took {% if d >= 60 %}{{ d // 60 }}m {{ d % 60 }}s{% else %}{{ d }}s{% endif %}{% endif %}</span>
     </div>
   </div>
   <div class="head-stats">
-    <div class="stat-mini"><span>Candidates</span> {{ scan['resume_count'] }}</div>
-    <div class="stat-mini"><span>Avg score</span> {{ scan['avg_score'] }}%</div>
+    <a class="ghost-btn" href="{{ url_for('export_results_xlsx', scan_id=scan['id']) }}">{{ icon('download', 'ico-svg sm') }} Export Excel</a>
+    <a class="primary-btn" href="{{ url_for('index') }}">{{ icon('bolt', 'ico-svg sm') }} New scan</a>
   </div>
 </div>
 
+<section class="grid-4" aria-label="Summary">
+  <div class="stat-tile"><span class="l">Candidates</span><span class="v">{{ scan['resume_count'] }}</span></div>
+  <div class="stat-tile accent"><span class="l">Shortlist</span><span class="v">{{ shortlisted }}</span></div>
+  <div class="stat-tile"><span class="l">To review</span><span class="v">{{ reviewing }}</span></div>
+  <div class="stat-tile"><span class="l">Average score</span><span class="v">{{ scan['avg_score'] }}%</span></div>
+</section>
+
 <div class="card kw-card">
-  <div class="card-title small">Auto-extracted JD keywords</div>
+  <div class="card-title small">Keywords taken from the job description</div>
   <div class="kw-row">
     {% for kw in keywords %}<span class="kw">{{ kw }}</span>{% endfor %}
   </div>
 </div>
 
-{# ── Toolbar: search, filters, export, bulk actions ── #}
-<div class="toolbar">
-  <input type="text" id="search" class="toolbar-search" placeholder="🔍 Search candidate name…">
-  <select id="filter-status" class="toolbar-select">
-    <option value="">All statuses</option>
-    <option value="Shortlist">Shortlist</option>
-    <option value="Review">Review</option>
-    <option value="Reject">Reject</option>
-  </select>
-  <select id="filter-grade" class="toolbar-select">
-    <option value="">All grades</option>
-    <option value="A">Grade A</option>
-    <option value="B">Grade B</option>
-    <option value="C">Grade C</option>
-    <option value="D">Grade D</option>
-    <option value="F">Grade F</option>
-  </select>
-  <span class="toolbar-count" id="visible-count"></span>
-  <div class="toolbar-spacer"></div>
-  <button type="button" class="ghost-btn" id="copy-emails">📧 Copy selected emails</button>
-  <button type="button" class="ghost-btn" id="draft-email">✉ Draft invite</button>
-  <a class="ghost-btn" href="{{ url_for('export_results_xlsx', scan_id=scan['id']) }}">⬇ Export Excel</a>
-</div>
-
 <div class="card table-card">
+  <div style="padding:16px 18px 2px;">
+    <div class="toolbar">
+      <label class="search-wrap">
+        <span class="sr-only">Search candidates</span>
+        {{ icon('search', 'ico-svg sm') }}
+        <input type="search" id="search" class="toolbar-search" placeholder="Search candidate name">
+      </label>
+      <label class="sr-only" for="filter-status">Filter by status</label>
+      <select id="filter-status" class="toolbar-select">
+        <option value="">All statuses</option>
+        <option value="Shortlist">Shortlist</option>
+        <option value="Review">Review</option>
+        <option value="Reject">Reject</option>
+      </select>
+      <label class="sr-only" for="filter-grade">Filter by grade</label>
+      <select id="filter-grade" class="toolbar-select">
+        <option value="">All grades</option>
+        <option value="A">Grade A</option>
+        <option value="B">Grade B</option>
+        <option value="C">Grade C</option>
+        <option value="D">Grade D</option>
+        <option value="F">Grade F</option>
+      </select>
+      <span class="toolbar-count" id="visible-count" aria-live="polite"></span>
+      <div class="toolbar-spacer"></div>
+      <button type="button" class="ghost-btn sm" id="copy-emails">{{ icon('copy', 'ico-svg sm') }} Copy emails</button>
+      <button type="button" class="ghost-btn sm" id="draft-email">{{ icon('mail', 'ico-svg sm') }} Draft invite</button>
+    </div>
+  </div>
+  <div class="table-scroll">
   <table class="rank-table" id="rank-table">
     <thead>
       <tr>
-        <th><input type="checkbox" id="select-all" title="Select all"></th>
+        <th><input type="checkbox" id="select-all" aria-label="Select all visible candidates"></th>
         <th>#</th>
-        <th>Score</th>
         <th>Candidate</th>
-        <th>Contact</th>
-        <th>Grade</th>
+        <th>Score</th>
         <th>Skills</th>
+        <th>Contact</th>
         <th>Status</th>
-        <th></th>
+        <th><span class="sr-only">Actions</span></th>
       </tr>
     </thead>
     <tbody>
       {% for c in candidates %}
-      <tr class="cand-row" data-name="{{ c['name']|lower }}" data-status="{{ c['status'] }}" data-grade="{{ c['grade'] }}">
-        <td><input type="checkbox" class="row-check" data-email="{{ c['email'] }}" data-name="{{ c['name'] }}"></td>
-        <td class="rk">#{{ loop.index }}</td>
-        <td><div class="score-orb {{ 'high' if c['score']>=70 else ('mid' if c['score']>=45 else 'low') }}">{{ c['score'] }}</div></td>
+      {% set band = 'high' if c['score']>=70 else ('mid' if c['score']>=45 else 'low') %}
+      {% set parts = (c['name'] or '?').split() %}
+      <tr class="cand-row {% if loop.first %}top{% endif %}" data-name="{{ c['name']|lower }}" data-status="{{ c['status'] }}" data-grade="{{ c['grade'] }}">
+        <td><input type="checkbox" class="row-check" data-email="{{ c['email'] }}" data-name="{{ c['name'] }}" aria-label="Select {{ c['name'] }}"></td>
+        <td class="rk">{{ loop.index }}</td>
         <td>
-          <div class="cand-name">{{ c['name'] }}</div>
-          <div class="cand-file">{{ c['filename'] }}</div>
+          <div class="person">
+            <span class="avatar" aria-hidden="true">{{ (parts[0][:1] ~ (parts[-1][:1] if parts|length > 1 else ''))|upper }}</span>
+            <div style="min-width:0;">
+              <div class="cand-name"><a href="{{ url_for('candidate_detail', candidate_id=c['id']) }}">{{ c['name'] }}</a></div>
+              <div class="cand-file" title="{{ c['filename'] }}">{{ c['filename'] }}</div>
+            </div>
+          </div>
         </td>
         <td>
-          <div class="meta copyable" title="Click to copy" data-copy="{{ c['email'] }}">{{ c['email'] }}</div>
+          <div class="fit">
+            <span class="fit-num">{{ c['score'] }}</span>
+            <span class="fit-bar {{ band }}" aria-hidden="true"><span style="width:{{ c['score'] }}%"></span></span>
+            <span class="grade g-{{ c['grade'] }}" title="Grade {{ c['grade'] }}">{{ c['grade'] }}</span>
+          </div>
+        </td>
+        <td>
+          <div class="kw-line"><span class="kw-num">{{ c['matched_skills']|length }}</span> of {{ c['matched_skills']|length + c['missing_skills']|length }} skills</div>
+          <div class="kw-mini" title="{{ c['matched_skills']|join(', ') }}">{{ c['matched_skills'][:5]|join(', ') }}{% if c['matched_skills']|length > 5 %}…{% endif %}</div>
+        </td>
+        <td>
+          <div class="meta copyable cand-file" style="max-width:200px;" title="Click to copy" data-copy="{{ c['email'] }}">{{ c['email'] }}</div>
           <div class="meta copyable" title="Click to copy" data-copy="{{ c['phone'] }}">{{ c['phone'] }}</div>
         </td>
-        <td><span class="grade g-{{ c['grade'] }}">{{ c['grade'] }}</span></td>
-        <td>
-          <div class="kw-line"><span class="kw-num">{{ c['matched_skills']|length }}</span>/{{ c['matched_skills']|length + c['missing_skills']|length }} skills matched</div>
-          <div class="kw-mini">{{ c['matched_skills'][:5]|join(', ') }}{% if c['matched_skills']|length > 5 %}…{% endif %}</div>
-        </td>
         <td><span class="pill p-{{ c['status']|lower }}">{{ c['status'] }}</span></td>
-        <td class="row-actions">
-          <a class="ghost-btn" href="{{ url_for('candidate_detail', candidate_id=c['id']) }}">View →</a>
-          <a class="ghost-btn" href="{{ url_for('candidate_download_file', candidate_id=c['id']) }}">⬇</a>
+        <td>
+          <div class="row-actions">
+            <a class="ghost-btn sm icon-btn" href="{{ url_for('candidate_download_file', candidate_id=c['id']) }}" aria-label="Download resume of {{ c['name'] }}">{{ icon('download', 'ico-svg sm') }}</a>
+          </div>
         </td>
       </tr>
       {% endfor %}
     </tbody>
   </table>
+  </div>
   <div class="empty-filter hidden" id="empty-filter">No candidates match these filters.</div>
 </div>
 
-<div class="actions-row">
-  <a class="primary-btn" href="{{ url_for('index') }}">⚡ New Scan</a>
-  <a class="ghost-btn big" href="{{ url_for('history') }}">View Scan History</a>
-</div>
-
 {# ── Email draft modal ── #}
-<div class="modal-overlay hidden" id="email-modal">
+<div class="modal-overlay hidden" id="email-modal" role="dialog" aria-modal="true" aria-labelledby="email-modal-title">
   <div class="modal">
     <div class="modal-head">
-      <strong>Interview invite draft</strong>
-      <button type="button" class="modal-close" id="modal-close">✕</button>
+      <h3 id="email-modal-title">Interview invite draft</h3>
+      <button type="button" class="modal-close" id="modal-close" aria-label="Close">{{ icon('x') }}</button>
     </div>
-    <p class="muted" style="margin:0 0 10px;">Based on your selected candidates. Edit and copy into your email tool.</p>
+    <p class="muted" style="margin:0 0 12px;">Based on your selected candidates. Edit, then copy into your email tool.</p>
+    <label class="sr-only" for="email-text">Email draft</label>
     <textarea id="email-text" class="email-textarea" rows="12"></textarea>
-    <div style="display:flex; gap:8px; margin-top:12px;">
-      <button type="button" class="primary-btn" id="copy-draft">Copy draft</button>
+    <div style="display:flex; gap:8px; margin-top:14px;">
+      <button type="button" class="primary-btn" id="copy-draft">{{ icon('copy', 'ico-svg sm') }} Copy draft</button>
       <button type="button" class="ghost-btn" id="modal-cancel">Close</button>
     </div>
   </div>
