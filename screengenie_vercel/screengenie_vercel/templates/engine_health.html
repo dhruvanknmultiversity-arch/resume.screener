@@ -1,0 +1,104 @@
+{% extends 'base.html' %}
+{% from '_icons.html' import icon %}
+{% block title %}Engine health{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Admin · last 7 days</div>
+    <h1>Engine health</h1>
+    <p class="lede">Whether Claude or the rule-based backup screened each resume, how long it took and what it cost.
+      A healthy engine shows almost every resume on the Claude path.</p>
+  </div>
+  <div class="head-stats">
+    <span class="engine-badge {{ 'ai' if config['api_key'] else 'rule' }}">{{ icon('cpu', 'ico-svg sm') }}
+      {{ 'API key set' if config['api_key'] else 'No API key: rule-based only' }}</span>
+  </div>
+</div>
+
+{% if stats['runs'] == 0 and stats['req_runs'] == 0 %}
+<div class="card empty">
+  <div class="empty-ico">{{ icon('cpu') }}</div>
+  <h3>No screening runs recorded yet</h3>
+  <p>Run a scan on Bulk Screener. Every resume it screens will appear here within seconds.</p>
+  <a class="primary-btn" href="{{ url_for('index') }}">{{ icon('bolt', 'ico-svg sm') }} Go to Bulk Screener</a>
+</div>
+{% else %}
+
+{% set share = stats['ai_share'] %}
+<section class="grid-4" aria-label="Summary">
+  <div class="stat-tile {{ 'accent' if share is not none and share >= 95 }}">
+    <span class="l">Screened by Claude</span>
+    <span class="v">{{ share if share is not none else '—' }}{% if share is not none %}%{% endif %}</span>
+    <span class="muted">{{ stats['ai'] }} of {{ stats['runs'] }} resumes{% if stats['rule'] %} · {{ stats['rule'] }} fell back{% endif %}</span>
+  </div>
+  <div class="stat-tile">
+    <span class="l">Time per resume</span>
+    <span class="v">{{ stats['p50'] if stats['p50'] is not none else '—' }}{% if stats['p50'] is not none %} s{% endif %}</span>
+    <span class="muted">typical · slowest 5%: {{ stats['p95'] if stats['p95'] is not none else '—' }}{% if stats['p95'] is not none %} s{% endif %}</span>
+  </div>
+  <div class="stat-tile">
+    <span class="l">Cost per resume</span>
+    <span class="v">{% if stats['cost_per_resume_inr'] is not none %}₹{{ '%.2f'|format(stats['cost_per_resume_inr']) }}{% else %}—{% endif %}</span>
+    <span class="muted">approx. · {{ '{:,}'.format(stats['avg_in']) }} in / {{ '{:,}'.format(stats['avg_out']) }} out tokens</span>
+  </div>
+  <div class="stat-tile">
+    <span class="l">Spend, 7 days</span>
+    <span class="v">₹{{ '%.0f'|format(stats['cost_inr']) }}</span>
+    <span class="muted">{{ stats['req_ai'] }} of {{ stats['req_runs'] }} checklists drafted by Claude{% if stats['cache_share'] is not none %} · {{ stats['cache_share'] }}% input from cache{% endif %}</span>
+  </div>
+</section>
+
+<div class="grid-2" style="grid-template-columns: minmax(0, 1.4fr) minmax(0, 1fr);">
+  <section class="card table-card" aria-labelledby="days-title">
+    <div style="padding:18px 18px 6px;"><h2 id="days-title" class="card-title" style="margin:0;">By day (last 14 days)</h2></div>
+    <table class="rank-table">
+      <thead><tr><th>Day</th><th>Resumes</th><th>Claude</th><th>Fell back</th><th>Cost</th></tr></thead>
+      <tbody>
+        {% for d in days %}
+        <tr>
+          <td>{{ d['day'] }}</td>
+          <td>{{ d['resumes'] }}</td>
+          <td>{{ d['ai'] }}</td>
+          <td>{% if d['rule'] %}<span class="pill p-review">{{ d['rule'] }}</span>{% else %}0{% endif %}</td>
+          <td>₹{{ '%.2f'|format(d['cost'] * config['usd_inr']) }}</td>
+        </tr>
+        {% else %}
+        <tr><td colspan="5" class="muted">No runs in the last 14 days.</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </section>
+
+  <section class="card" aria-labelledby="cfg-title">
+    <h2 id="cfg-title" class="card-title">Engine settings</h2>
+    <div class="reason-list">
+      <div class="reason-item"><span class="reason-ico">{{ icon('cpu', 'ico-svg sm') }}</span><span><strong>{{ config['model'] }}</strong> · effort {{ config['effort'] }} · {{ config['version'] }}</span></div>
+      <div class="reason-item"><span class="reason-ico">{{ icon('clock', 'ico-svg sm') }}</span><span>{{ '%g'|format(config['timeout']) }} s timeout per call · {{ config['parallel'] }} calls in parallel</span></div>
+      <div class="reason-item"><span class="reason-ico">{{ icon('info', 'ico-svg sm') }}</span><span>Priced at ${{ '%g'|format(config['price_in']) }} / ${{ '%g'|format(config['price_out']) }} per million input/output tokens, ₹{{ '%g'|format(config['usd_inr']) }} per $ (set SG_USD_INR to update)</span></div>
+    </div>
+  </section>
+</div>
+
+<section class="card table-card" aria-labelledby="fail-title">
+  <div style="padding:18px 18px 6px;">
+    <h2 id="fail-title" class="card-title" style="margin:0;">Recent fallbacks and errors</h2>
+    <p class="card-sub" style="margin-top:4px;">Each row is a resume or checklist that the rule-based backup handled instead of Claude, with the reason.</p>
+  </div>
+  <table class="rank-table">
+    <thead><tr><th>When (UTC)</th><th>Type</th><th>File</th><th>Reason</th></tr></thead>
+    <tbody>
+      {% for f in failures %}
+      <tr>
+        <td class="meta" style="white-space:nowrap;">{{ f['created_at'][:16]|replace('T', ' ') }}</td>
+        <td>{{ 'Checklist' if f['kind'] == 'requisition' else 'Resume' }}</td>
+        <td>{% if f['scan_id'] %}<a class="cand-name" href="{{ url_for('results', scan_id=f['scan_id']) }}">{{ f['filename'] or '—' }}</a>{% else %}{{ f['filename'] or '—' }}{% endif %}</td>
+        <td class="meta" style="max-width:520px;">{{ f['error'] }}</td>
+      </tr>
+      {% else %}
+      <tr><td colspan="4" class="muted">No fallbacks recorded. Claude handled everything.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

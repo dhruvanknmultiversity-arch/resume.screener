@@ -37,6 +37,12 @@ MODEL = os.environ.get("SG_MODEL", "claude-sonnet-5-5")
 EFFORT = os.environ.get("SG_EFFORT", "low")          # low | medium | high
 CALL_TIMEOUT = float(os.environ.get("SG_TIMEOUT", "55"))
 
+# USD per million tokens (Claude Sonnet 5.5 list price); override with env vars.
+PRICE_IN = float(os.environ.get("SG_PRICE_IN", "2.0"))
+PRICE_OUT = float(os.environ.get("SG_PRICE_OUT", "10.0"))
+PRICE_CACHE_READ = PRICE_IN * 0.1
+PRICE_CACHE_WRITE = PRICE_IN * 1.25
+
 KIND_WEIGHT_DEFAULT = {"knockout": 3, "must": 3, "nice": 1}
 VERDICT_VALUE = {"met": 1.0, "partial": 0.5, "not_met": 0.0}
 
@@ -88,17 +94,46 @@ def _strip_json(text):
     return text
 
 
-def call_json(system, user_content, schema, max_tokens=4000, client=None):
+def new_meta(kind):
+    """Run record for the engine-health log: path, model, tokens, time, cost."""
+    return {"kind": kind, "path": "rule", "model": None, "input_tokens": 0, "output_tokens": 0,
+            "cache_read_tokens": 0, "cache_write_tokens": 0, "seconds": 0.0, "cost_usd": 0.0,
+            "attempts": 0, "error": None}
+
+
+def _record_usage(meta, resp, started):
+    if meta is None:
+        return
+    usage = getattr(resp, "usage", None)
+    get = lambda k: int(getattr(usage, k, 0) or 0) if usage is not None else 0
+    meta.update(
+        model=getattr(resp, "model", None) or MODEL,
+        input_tokens=meta["input_tokens"] + get("input_tokens"),
+        output_tokens=meta["output_tokens"] + get("output_tokens"),
+        cache_read_tokens=meta["cache_read_tokens"] + get("cache_read_input_tokens"),
+        cache_write_tokens=meta["cache_write_tokens"] + get("cache_creation_input_tokens"),
+    )
+    meta["seconds"] = round(time.time() - started, 2)
+    meta["cost_usd"] = round((meta["input_tokens"] * PRICE_IN + meta["output_tokens"] * PRICE_OUT
+                              + meta["cache_read_tokens"] * PRICE_CACHE_READ
+                              + meta["cache_write_tokens"] * PRICE_CACHE_WRITE) / 1e6, 6)
+
+
+def call_json(system, user_content, schema, max_tokens=4000, client=None, meta=None):
     """One structured-output call. Returns the parsed dict, or raises.
 
     ``output_config`` is sent through ``extra_body`` so this works on any
-    version of the anthropic SDK."""
+    version of the anthropic SDK. When ``meta`` (from ``new_meta``) is given,
+    tokens, time and cost are added to it."""
     import anthropic
     client = client or _get_client()
+    started = time.time()
     body = {"output_config": {"format": {"type": "json_schema", "schema": schema}, "effort": EFFORT}}
     delays = [2, 5, 10]
     for attempt in range(len(delays) + 1):
         try:
+            if meta is not None:
+                meta["attempts"] += 1
             with _semaphore:
                 resp = client.messages.create(
                     model=MODEL,
@@ -107,6 +142,7 @@ def call_json(system, user_content, schema, max_tokens=4000, client=None):
                     messages=[{"role": "user", "content": user_content}],
                     extra_body=body,
                 )
+            _record_usage(meta, resp, started)
             if getattr(resp, "stop_reason", None) == "refusal":
                 raise RuntimeError("model refused")
             text = next((b.text for b in resp.content if getattr(b, "type", None) == "text"), "")
@@ -212,21 +248,26 @@ def rule_requisition(jd_text):
 
 
 def draft_requisition(jd_text, context="", client=None):
+    meta = new_meta("requisition")
     if client is None and not llm_available():
-        return rule_requisition(jd_text)
+        meta["error"] = "ANTHROPIC_API_KEY not set or anthropic package missing"
+        return dict(rule_requisition(jd_text), meta=meta)
+    started = time.time()
     try:
         user = (f"Hiring context from the recruiter (may be empty): {context.strip()[:1500]}\n\n"
                 f"<job_description>\n{jd_text[:20000]}\n</job_description>\n\n"
                 "Return the screening checklist.")
-        data = call_json(REQUISITION_SYSTEM, user, REQUISITION_SCHEMA, max_tokens=2000, client=client)
+        data = call_json(REQUISITION_SYSTEM, user, REQUISITION_SCHEMA, max_tokens=2000, client=client, meta=meta)
         crit = _clean_criteria(data.get("criteria"))
         if not crit:
             raise RuntimeError("no criteria returned")
+        meta["path"] = "ai"
         return {"role_title": str(data.get("role_title", ""))[:120],
-                "seniority": data.get("seniority", "Unknown"), "criteria": crit, "engine": "ai"}
+                "seniority": data.get("seniority", "Unknown"), "criteria": crit, "engine": "ai", "meta": meta}
     except Exception as e:
         log(f"requisition draft failed, using rule-based: {type(e).__name__}: {e}")
-        return rule_requisition(jd_text)
+        meta.update(error=f"{type(e).__name__}: {e}"[:500], seconds=round(time.time() - started, 2))
+        return dict(rule_requisition(jd_text), meta=meta)
 
 
 # ---------------------------------------------------------------------------
@@ -585,9 +626,12 @@ def rule_evaluate(criteria, resume_text, today=None):
 def evaluate_resume(jd_text, criteria, resume_text, name=None, client=None, today=None):
     if not criteria:
         raise ValueError("no criteria")
+    meta = new_meta("resume")
     if client is None and not llm_available():
-        return rule_evaluate(criteria, resume_text, today)
+        meta["error"] = "ANTHROPIC_API_KEY not set or anthropic package missing"
+        return dict(rule_evaluate(criteria, resume_text, today), meta=meta)
     masked = mask_pii(resume_text, name)
+    started = time.time()
     try:
         user = [
             {"type": "text", "text": f"<job_description>\n{jd_text[:15000]}\n</job_description>\n\n"
@@ -595,10 +639,12 @@ def evaluate_resume(jd_text, criteria, resume_text, name=None, client=None, toda
              "cache_control": {"type": "ephemeral"}},
             {"type": "text", "text": f"<resume>\n{masked[:30000]}\n</resume>\n\nEvaluate this resume against every checklist id."},
         ]
-        data = call_json(EVAL_SYSTEM, user, EVAL_SCHEMA, max_tokens=5000, client=client)
+        data = call_json(EVAL_SYSTEM, user, EVAL_SCHEMA, max_tokens=5000, client=client, meta=meta)
     except Exception as e:
         log(f"resume evaluation failed, using rule-based: {type(e).__name__}: {e}")
-        return rule_evaluate(criteria, resume_text, today)
+        meta.update(error=f"{type(e).__name__}: {e}"[:500], seconds=round(time.time() - started, 2))
+        return dict(rule_evaluate(criteria, resume_text, today), meta=meta)
+    meta["path"] = "ai"
     roles = [r for r in (data.get("roles") or []) if isinstance(r, dict)][:30]
     exp = experience_months(roles, today)
     out = _finish(criteria, data.get("criteria") or [], masked, exp, "ai")
@@ -611,5 +657,6 @@ def evaluate_resume(jd_text, criteria, resume_text, name=None, client=None, toda
         summary=[str(s)[:400] for s in (data.get("summary") or [])][:4],
         interview_questions=[str(s)[:300] for s in (data.get("interview_questions") or [])][:4],
         red_flags=[str(s)[:300] for s in (data.get("red_flags") or [])][:4],
+        meta=meta,
     )
     return out
