@@ -317,6 +317,33 @@ def healthz():
     return {"status": "ok"}
 
 
+@app.route("/cron/keepalive")
+def cron_keepalive():
+    """Daily Vercel cron: touch the database so Supabase never pauses the project for inactivity.
+
+    Vercel sends "Authorization: Bearer <CRON_SECRET>" when CRON_SECRET is set; then nothing else
+    may call this. Without the secret it still only writes one timestamp, so it is harmless."""
+    import hmac
+    secret = os.environ.get("CRON_SECRET", "")
+    if secret:
+        sent = request.headers.get("Authorization", "")
+        if not hmac.compare_digest(sent.encode(), f"Bearer {secret}".encode()):
+            return {"status": "forbidden"}, 403
+    try:
+        db = get_db()
+        cur = db.cursor()
+        cur.execute("CREATE TABLE IF NOT EXISTS heartbeat (id INTEGER PRIMARY KEY, last_seen TEXT NOT NULL)")
+        cur.execute("INSERT INTO heartbeat (id, last_seen) VALUES (1, %s) "
+                    "ON CONFLICT (id) DO UPDATE SET last_seen = EXCLUDED.last_seen",
+                    (datetime.utcnow().isoformat(),))
+        db.commit()
+        cur.close()
+        return {"status": "ok"}
+    except Exception as e:
+        print(f"[screen-genie] keepalive failed: {type(e).__name__}: {e}", file=sys.stderr)
+        return {"status": "error"}, 503
+
+
 @app.route("/")
 def index():
     return render_template("bulk_screener.html")

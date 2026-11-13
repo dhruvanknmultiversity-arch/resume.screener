@@ -11,5 +11,11 @@
       "src": "/(.*)",
       "dest": "app.py"
     }
+  ],
+  "crons": [
+    {
+      "path": "/cron/keepalive",
+      "schedule": "17 3 * * *"
+    }
   ]
 }

@@ -99,3 +99,29 @@ def test_locked_page_names_the_problem_without_values():
     assert b"SECRET_KEY is too short (8 characters" in r.data
     assert b"TEAM_PASSWORD is not set" in r.data
     assert b"tooshort" not in r.data
+
+
+def test_keepalive_is_public_but_respects_cron_secret(monkeypatch):
+    os.environ.update(SECRET_KEY="x" * 40, TEAM_PASSWORD="hunter2-team-pass")
+    for m in ("app", "auth"):
+        sys.modules.pop(m, None)
+    import app as app_module
+    calls = []
+
+    class Cur:
+        def execute(self, sql, params=None): calls.append(sql)
+        def close(self): pass
+
+    class DB:
+        def cursor(self): return Cur()
+        def commit(self): calls.append("commit")
+
+    monkeypatch.setattr(app_module, "get_db", lambda: DB())
+    monkeypatch.setattr(app_module, "ensure_db_ready", lambda: None)
+    c = app_module.app.test_client()
+    monkeypatch.delenv("CRON_SECRET", raising=False)
+    assert c.get("/cron/keepalive").status_code == 200 and "commit" in calls
+    monkeypatch.setenv("CRON_SECRET", "s3cret-value")
+    assert c.get("/cron/keepalive").status_code == 403
+    assert c.get("/cron/keepalive", headers={"Authorization": "Bearer s3cret-value"}).status_code == 200
+    assert c.get("/dashboard").status_code in (302, 303)        # everything else stays locked
