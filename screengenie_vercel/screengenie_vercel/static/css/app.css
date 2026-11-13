@@ -686,3 +686,9 @@ h3 { font-size: 16px; font-weight: 800; }
 .exp-kind.work { background: var(--good-bg); color: var(--good-text); border-color: var(--good-border); }
 .exp-kind.intern { background: var(--warn-bg); color: var(--warn-text); border-color: var(--warn-border); }
 .exp-kind.excluded { background: var(--soft); color: var(--muted); border-color: var(--border); }
+
+/* ── Files that could not be read ── */
+.unreadable-note { margin-bottom: 20px; }
+.unreadable-list { margin: 6px 0 0; padding-left: 18px; }
+.unreadable-list li { margin: 2px 0; }
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 12.5px; }

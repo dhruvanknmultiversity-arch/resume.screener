@@ -314,37 +314,195 @@ DATE_RANGE_RE = re.compile(
 # ----------------------------------------------------------------------
 
 def _docx_full_text(fileobj):
-    """Extract ALL text from a .docx — paragraphs, tables, headers & footers.
-    Many resumes/JDs lay everything out in tables, which the old paragraph-only
-    reader silently dropped."""
+    """All text of a .docx in reading order: paragraphs and tables where they sit,
+    text boxes and shapes (common in template resumes), then headers and footers."""
     document = docx.Document(fileobj)
+    W = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
     parts = []
 
-    # Body paragraphs
-    for p in document.paragraphs:
-        if p.text and p.text.strip():
-            parts.append(p.text)
+    def para_text(p_el):
+        # text of this paragraph only: skip runs inside text boxes (read separately below)
+        out = []
+        for node in p_el.iter():
+            if node.tag == W + "txbxContent":
+                continue
+            if node.tag == W + "t" and node.text:
+                anc = node.getparent()
+                inside_box = False
+                while anc is not None and anc is not p_el:
+                    if anc.tag == W + "txbxContent":
+                        inside_box = True
+                        break
+                    anc = anc.getparent()
+                if not inside_box:
+                    out.append(node.text)
+            elif node.tag in (W + "tab",):
+                out.append(" ")
+            elif node.tag in (W + "br", W + "cr"):
+                out.append("\n")
+        return "".join(out)
 
-    # Tables (rows × cells) — walk every table, including nested paragraphs
-    def _read_tables(tables):
-        for table in tables:
-            for row in table.rows:
-                cells = [c.text.strip() for c in row.cells if c.text and c.text.strip()]
-                if cells:
-                    parts.append(" | ".join(cells))
+    def walk(container):
+        for child in container.iterchildren():
+            if child.tag == W + "p":
+                t = para_text(child)
+                if t.strip():
+                    parts.append(t)
+                for box in child.iter(W + "txbxContent"):
+                    walk(box)
+            elif child.tag == W + "tbl":
+                for tr in child.iter(W + "tr"):
+                    cells = []
+                    for tc in tr.iterchildren(W + "tc"):
+                        ct = "\n".join(para_text(p) for p in tc.iter(W + "p")).strip()
+                        if ct:
+                            cells.append(re.sub(r"\s*\n\s*", " · ", ct) if len(ct) < 200 else ct)
+                    if cells:
+                        parts.append(" | ".join(cells))
+            elif child.tag == W + "sdt":
+                content = child.find(W + "sdtContent")
+                if content is not None:
+                    walk(content)
 
-    _read_tables(document.tables)
-
-    # Headers / footers of each section
+    walk(document.element.body)
+    seen = set(parts)
     for section in document.sections:
         for hdr in (section.header, section.footer):
             if hdr is None:
                 continue
             for p in hdr.paragraphs:
-                if p.text and p.text.strip():
+                if p.text and p.text.strip() and p.text not in seen:
                     parts.append(p.text)
-
+                    seen.add(p.text)
     return "\n".join(parts)
+
+
+# ----------------------------------------------------------------------
+# PDF reading: keeps the columns of two-column resumes apart
+# ----------------------------------------------------------------------
+
+COLUMN_BREAK = "\f"          # marks the end of one column; experience.py resets the section there
+
+
+def _find_gutter(words, page_width):
+    """x position of an empty vertical strip that splits the page into two columns, or None.
+
+    Returns (x, header_bottom): words above header_bottom (a full-width name/contact line)
+    are read across the whole page first."""
+    if len(words) < 25:
+        return None
+    best = None
+    for x in range(int(page_width * 0.22), int(page_width * 0.78), 3):
+        crossing = [w for w in words if w["x0"] < x < w["x1"]]
+        left = sum(1 for w in words if w["x1"] <= x)
+        right = sum(1 for w in words if w["x0"] >= x)
+        if left < 0.12 * len(words) or right < 0.12 * len(words):
+            continue
+        if best is None or len(crossing) < len(best[1]):
+            best = (x, crossing)
+        if not crossing:
+            break
+    if best is None:
+        return None
+    x, crossing = best
+    tops = [w["top"] for w in words]
+    page_top, page_bottom = min(tops), max(w["bottom"] for w in words)
+    limit = page_top + 0.22 * (page_bottom - page_top)
+    # header lines: near the top and running across the gutter as one line of text
+    # (a word crosses it, or the words either side are only a normal space apart)
+    lines = {}
+    for w in words:
+        lines.setdefault(round(w["top"] / 3), []).append(w)
+    header_bottom = 0.0
+    for key in sorted(lines):
+        ws = lines[key]
+        if min(w["top"] for w in ws) > limit:
+            break
+        lft = [w for w in ws if w["x1"] <= x]
+        rgt = [w for w in ws if w["x0"] >= x]
+        crosses = any(w["x0"] < x < w["x1"] for w in ws)
+        joined = lft and rgt and (min(w["x0"] for w in rgt) - max(w["x1"] for w in lft)) < 14
+        if crosses or joined:
+            header_bottom = max(w["bottom"] for w in ws) + 1
+    if not crossing:
+        return (x, header_bottom) if _real_columns(words, x, header_bottom) else None
+    if all(w["bottom"] <= max(limit, header_bottom) for w in crossing) and len(crossing) <= 30:
+        header_bottom = max([header_bottom] + [w["bottom"] + 1 for w in crossing])
+        if _real_columns(words, x, header_bottom):
+            return x, header_bottom
+    return None
+
+
+def _real_columns(words, x, header_bottom):
+    """Both sides must hold real text, line after line. A right-hand strip of dates
+    ("Title ........ Jan 2020 - Present") is part of one column, not a second column."""
+    import experience
+    below = [w for w in words if w["top"] >= header_bottom]
+
+    def text_lines(side):
+        lines = {}
+        for w in side:
+            lines.setdefault(round(w["top"] / 3), []).append(w["text"])
+        n = 0
+        for parts in lines.values():
+            t = " ".join(parts)
+            t = experience.RANGE_RE.sub(" ", t)
+            t = re.sub(experience._DATE, " ", t, flags=re.I)
+            t = re.sub(r"\b(present|current|till date|to date|now|onwards?)\b", " ", t, flags=re.I)
+            if len(re.findall(r"[A-Za-z]", t)) >= 3:
+                n += 1
+        return n
+
+    left = text_lines([w for w in below if w["x1"] <= x])
+    right = text_lines([w for w in below if w["x0"] >= x])
+    return left >= 4 and right >= 4
+
+
+def _clean_pdf_text(t):
+    t = re.sub(r"\(cid:\d+\)", " ", t or "")
+    t = t.replace("\u00a0", " ").replace("\ufb01", "fi").replace("\ufb02", "fl")
+    return t
+
+
+def pdf_text(data):
+    """Text of a PDF, page by page. Two-column pages are read column by column
+    (wider column first) so headings and dates stay with their own column."""
+    out = []
+    with pdfplumber.open(io.BytesIO(data)) as pdf:
+        for page in pdf.pages[:12]:
+            try:
+                words = page.extract_words(keep_blank_chars=False, use_text_flow=False)
+            except Exception:
+                words = []
+            g = _find_gutter(words, page.width) if words else None
+            if not g:
+                out.append(_clean_pdf_text(page.extract_text(x_tolerance=1.5) or ""))
+                continue
+            x, header_bottom = g
+            parts = []
+            if header_bottom:
+                parts.append(page.crop((0, 0, page.width, header_bottom)).extract_text(x_tolerance=1.5) or "")
+            left = page.crop((0, header_bottom, x, page.height)).extract_text(x_tolerance=1.5) or ""
+            right = page.crop((x, header_bottom, page.width, page.height)).extract_text(x_tolerance=1.5) or ""
+            cols = sorted([left, right], key=len, reverse=True)
+            parts += [cols[0], COLUMN_BREAK, cols[1], COLUMN_BREAK]
+            out.append(_clean_pdf_text("\n".join(parts)))
+    return "\n".join(out)
+
+
+def read_quality(text):
+    """Is the extracted text usable? -> (ok, reason)."""
+    t = (text or "").strip()
+    letters = len(re.findall(r"[A-Za-z]", t))
+    if letters < 80:
+        return False, "No readable text (likely a scanned or image-only file)"
+    words = re.findall(r"[A-Za-z]{2,}", t)
+    if words and sum(len(w) for w in words) / len(words) > 14:
+        return False, "Text came out without spaces (unusual PDF fonts)"
+    junk = len(re.findall(r"[^\x00-\x7F\u0900-\u097F\u00C0-\u024F\u2010-\u203A\u20B9•·–—’‘“”…●▪◦✓➢➤►|]", t))
+    if junk > 0.15 * len(t):
+        return False, "Text is mostly unreadable characters (unusual PDF fonts)"
+    return True, ""
 
 
 def _legacy_doc_text(data):
@@ -379,11 +537,7 @@ def extract_text_from_file(filename, fileobj):
         return ""
 
     def _from_pdf():
-        text = []
-        with pdfplumber.open(io.BytesIO(data)) as pdf:
-            for page in pdf.pages:
-                text.append(page.extract_text() or "")
-        return "\n".join(text)
+        return pdf_text(data)
 
     def _from_docx():
         return _docx_full_text(io.BytesIO(data))

@@ -1,6 +1,6 @@
 """Day-0 access gate for Screen Genie.
 
-Every route except /login, /logout, /healthz and /static now requires a signed-in
+Every route except /login, /logout, /healthz, /cron/keepalive and /static now requires a signed-in
 session. Sign-in = the shared team password. If ALLOWED_EMAIL_DOMAINS or
 ALLOWED_EMAILS is set, a matching work email is required as well. This is a
 stop-gap until Day 1 replaces it with Supabase Auth + Google/Microsoft SSO.
@@ -31,7 +31,7 @@ from flask import (
 )
 
 _DEV_KEY = "screen-genie-internal-dev-key"
-_PUBLIC_ENDPOINTS = {"login", "logout", "healthz", "static"}
+_PUBLIC_ENDPOINTS = {"login", "logout", "healthz", "static", "cron_keepalive"}
 _FAILED_DELAY_SECONDS = 1.0
 
 
