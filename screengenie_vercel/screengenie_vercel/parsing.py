@@ -77,6 +77,7 @@ teamwork collaboration collaborative projects project solutions solution generat
 healthcare documentation communication passionate passion motivated self-motivated
 hardworking hard-working dynamic excellent strong good ability abilities attitude
 learn learning willing eager detail-oriented problem solving problem-solving skills
+nice good-to-have nice-to-have bonus advantage added desirable have having strong
 """.split())
 
 ALL_NOISE = STOPWORDS | NOISE_TERMS
@@ -123,6 +124,10 @@ SKILL_ALIASES = {
     "graphql": ["graphql"],
 
     # ---- Data / ML / AI ----
+    "statistics": ["statistics", "statistical analysis", "statistical modelling", "statistical modeling"],
+    "a/b testing": ["a/b testing", "a/b tests", "a/b test", "ab testing", "split testing", "experimentation"],
+    "regression": ["regression", "regression analysis", "regression models"],
+    "data visualization": ["data visualization", "data visualisation", "dashboards", "dashboarding"],
     "machine learning": ["machine learning", "ml", "supervised learning", "unsupervised learning"],
     "deep learning": ["deep learning", "dl", "neural network", "neural networks"],
     "nlp": ["nlp", "natural language processing"],
@@ -240,7 +245,7 @@ SKILL_ALIASES = {
     "communication": ["communication", "verbal communication", "written communication"],
     "leadership": ["leadership", "team lead", "team leadership"],
     "project management": ["project management", "pmp"],
-    "presentation": ["presentation", "presentation skills"],
+    "presentation": ["presentation", "presentations", "presentation skills"],
     "stakeholder management": ["stakeholder management"],
     "problem solving": ["problem solving", "analytical thinking"],
     "time management": ["time management"],
@@ -294,7 +299,7 @@ SECTION_HEADERS = {
 
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
-PHONE_RE = re.compile(r"(\+?\d[\d\-\s()]{8,}\d)")
+PHONE_RE = re.compile(r"(\+?\(?\d[\d\-\s()]{8,}\d)")
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9+#]*(?:[.\-][A-Za-z0-9+#]+)*")
 YEARS_RE = re.compile(r"(\d{1,2})\s*\+?\s*(?:years|yrs|year)\s*(?:of)?\s*(?:experience|exp)?", re.I)
 DATE_RANGE_RE = re.compile(
@@ -451,19 +456,38 @@ def extract_resumes_from_zip(fileobj):
 # Contact extraction
 # ----------------------------------------------------------------------
 
+_YEAR_RANGE_RE = re.compile(r"^\(?(?:19|20)\d{2}\)?\s*[-–—to\s]+\s*\(?(?:19|20)\d{2}\)?$", re.I)
+
+
+def extract_phone(text):
+    """First phone-like number with 10-15 digits that is not a year range or a date."""
+    for m in PHONE_RE.finditer(text or ""):
+        cand = m.group(0).strip()
+        digits = re.sub(r"\D", "", cand)
+        if not 10 <= len(digits) <= 15:
+            continue
+        if _YEAR_RANGE_RE.match(cand) or re.fullmatch(r"(?:(?:19|20)\d{2}\D*){2,}", cand):
+            continue
+        return cand
+    return None
+
+
 def extract_contact_info(text):
     email_match = EMAIL_RE.search(text)
     email = email_match.group(0) if email_match else None
 
-    phone_match = PHONE_RE.search(text)
-    phone = phone_match.group(0).strip() if phone_match else None
+    phone = extract_phone(text)
 
     name = None
-    for line in text.splitlines()[:30]:
-        line = line.strip()
-        if not line:
+    for raw_line in text.splitlines()[:30]:
+        raw_line = raw_line.strip()
+        if not raw_line:
             continue
-        if EMAIL_RE.search(line) or PHONE_RE.search(line):
+        # headers like "Aisha Verma | Data Analyst | Bengaluru" or "Name · email · phone":
+        # the name is the first segment
+        line = re.split(r"\s*(?:\||•|·|\u2022|,|\t| {3,}| [-–—] )\s*", raw_line)[0].strip()
+        line = re.sub(r"^(?:name)\s*[:\-]\s*", "", line, flags=re.I).strip()
+        if not line or EMAIL_RE.search(line) or extract_phone(line):
             continue
         # name heuristic: 1-4 words, short, mostly letters
         words = line.split()
