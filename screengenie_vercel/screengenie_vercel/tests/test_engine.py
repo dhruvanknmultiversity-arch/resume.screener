@@ -128,7 +128,7 @@ def test_experience_union_excludes_overlap_and_separates_internships():
         {"start": "2015", "end": "2015", "is_internship": True},
     ], TODAY)
     assert exp["work"] == (2026 * 12 + 11) - (2016 * 12 + 6) + 1      # Jun 2016 → Nov 2026
-    assert exp["internship"] == 12
+    assert exp["internship"] == 6          # "2015 - 2015" (years only) is read as about 6 months
     assert engine.experience_months([{"start": "2027-01", "end": "2027-05"}], TODAY)["work"] == 0
 
 

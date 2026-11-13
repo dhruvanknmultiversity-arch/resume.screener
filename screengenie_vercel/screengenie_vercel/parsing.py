@@ -595,33 +595,15 @@ def required_years(jd_text):
     return max(matches) if matches else None
 
 
-_EDU_LINE_RE = re.compile(
-    r"\b(b\.?\s?tech|b\.?\s?e\.?|m\.?\s?tech|bca|mca|mba|bba|b\.?\s?sc|m\.?\s?sc|b\.?\s?com|m\.?\s?com|"
-    r"ph\.?\s?d|bachelor|master|degree|diploma|university|college|school|institute|academy|cgpa|gpa|"
-    r"percentage|hsc|ssc|10th|12th|class\s+x|graduat\w*|semesters?|coursework|courses?|certifications?|"
-    r"certificates?|education|projects?|capstone|thesis|hackathons?)\b", re.I)
 _EXPLICIT_EXP_RE = re.compile(
     r"(\d{1,2}(?:\.\d)?)\s*\+?\s*(?:years|yrs|year)\s+(?:of\s+)?(?:[a-z/&\-]+\s+){0,3}?(?:experience|exp)\b", re.I)
-_INTERN_RE = re.compile(r"\b(intern|internship|trainee|apprentice)\b", re.I)
 
 
 def rule_experience_months(resume_text, today=None):
-    """Union of dated employment ranges, in months. Lines that look like
-    education, courses or projects are ignored; internships counted apart."""
-    from engine import experience_months
-    roles = []
-    lines = resume_text.splitlines()
-    for i, line in enumerate(lines):
-        for m in DATE_RANGE_RE.finditer(line):
-            context = " ".join(lines[max(0, i - 1): i + 2])
-            if _EDU_LINE_RE.search(line) or (_EDU_LINE_RE.search(context) and not re.search(
-                    r"\b(engineer|developer|analyst|manager|executive|associate|consultant|intern|lead|officer|"
-                    r"specialist|designer|scientist|support|administrator|assistant)\b", context, re.I)):
-                continue
-            start = ((m.group(1) or "") + " " + m.group(2)).strip()
-            end = ((m.group(3) or "") + " " + m.group(4)).strip()
-            roles.append({"start": start, "end": end, "is_internship": bool(_INTERN_RE.search(context))})
-    return experience_months(roles, today)
+    """Work experience from the dates in the resume (rules in experience.py):
+    {"work", "internship", "total", "overlap", "approximate", "roles", "stated_years"} in months."""
+    import experience
+    return experience.from_text(resume_text, today)
 
 
 def candidate_years(resume_text):

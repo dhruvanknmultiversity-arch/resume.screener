@@ -32,6 +32,8 @@ import threading
 import time
 from datetime import date
 
+import experience
+
 ENGINE_VERSION = "sg-engine-2.0"
 MODEL = os.environ.get("SG_MODEL", "claude-sonnet-5-5")
 EFFORT = os.environ.get("SG_EFFORT", "low")          # low | medium | high
@@ -376,71 +378,15 @@ def mask_pii(text, name=None):
 # Experience maths
 # ---------------------------------------------------------------------------
 
-_MONTHS = {m: i + 1 for i, m in enumerate(["jan", "feb", "mar", "apr", "may", "jun",
-                                           "jul", "aug", "sep", "oct", "nov", "dec"])}
-
-
 def parse_month(value, today=None, is_end=False):
-    """'2024-03', '2024', 'Mar 2024', 'present' -> months since year 0, or None."""
-    today = today or date.today()
-    if value is None:
-        return None
-    s = str(value).strip().lower()
-    if not s:
-        return None
-    if s in ("present", "current", "now", "till date", "ongoing", "today"):
-        return today.year * 12 + today.month
-    m = re.match(r"^(\d{4})[-/.](\d{1,2})", s)
-    if m:
-        y, mo = int(m.group(1)), int(m.group(2))
-    else:
-        y_m = re.search(r"(19|20)\d{2}", s)
-        if not y_m:
-            return None
-        y = int(y_m.group(0))
-        name = re.search(r"(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)", s)
-        mo = _MONTHS[name.group(1)] if name else (12 if is_end else 1)
-    if not (1 <= mo <= 12) or not (1970 <= y <= today.year + 1):
-        return None
-    return y * 12 + mo
+    """One date string -> month index (see experience.py for the rules)."""
+    return experience.parse_month(value, today, is_end)
 
 
 def experience_months(roles, today=None):
-    """Union of employment intervals in months. Overlapping jobs count once.
-
-    Returns {"total": n, "work": n, "internship": n}; internships are counted
-    separately so they never inflate full-time experience."""
-    today = today or date.today()
-    now = today.year * 12 + today.month
-
-    def union(intervals):
-        total, cur_s, cur_e = 0, None, None
-        for s, e in sorted(intervals):
-            if cur_e is None or s > cur_e:
-                if cur_e is not None:
-                    total += cur_e - cur_s
-                cur_s, cur_e = s, e
-            else:
-                cur_e = max(cur_e, e)
-        if cur_e is not None:
-            total += cur_e - cur_s
-        return total
-
-    work, intern = [], []
-    for r in roles or []:
-        s = parse_month(r.get("start"), today)
-        e = parse_month(r.get("end"), today, is_end=True)
-        if s is None:
-            continue
-        if e is None:
-            e = s + 1
-        e = min(e, now)
-        if e < s:
-            continue
-        span = (s, e + 1)          # inclusive of the end month
-        (intern if r.get("is_internship") else work).append(span)
-    w, i = union(work), union(intern)
-    return {"work": w, "internship": i, "total": union(work + intern)}
+    """Union of employment intervals in months; overlaps count once, internships kept apart.
+    Returns {"work", "internship", "total", "overlap", "approximate", "roles"}."""
+    return experience.from_role_dicts(roles, today)
 
 
 # ---------------------------------------------------------------------------
@@ -747,7 +693,14 @@ def evaluate_resume(jd_text, criteria, resume_text, name=None, client=None, toda
         return dict(rule_evaluate(criteria, resume_text, today), meta=meta)
     meta["path"] = "ai"
     roles = [r for r in (data.get("roles") or []) if isinstance(r, dict)][:30]
-    exp = experience_months(roles, today)
+    # Claude reads the roles; the months are counted here, and only from dates that are in the resume
+    exp = experience.from_model_roles(roles, resume_text, today)
+    scan = experience.from_text(resume_text, today)
+    if not exp["work"] and not exp["internship"] and (scan["work"] or scan["internship"]):
+        exp = scan                                  # Claude returned no usable roles: use the date scan
+    elif abs(exp["work"] - scan["work"]) >= 12 and scan["roles"]:
+        exp["cross_check"] = (f"A second reading of the dates gives {scan['work'] / 12:.1f} years; "
+                              f"check the dates in this resume.")
     out = _finish(criteria, data.get("criteria") or [], masked, exp, "ai")
     # evidence was checked against the masked text the model saw; show it as-is
     out.update(
