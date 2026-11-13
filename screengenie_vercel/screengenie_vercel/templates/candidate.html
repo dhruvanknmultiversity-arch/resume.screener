@@ -108,6 +108,47 @@
 </section>
 {% endif %}
 
+{# ── How experience was calculated ── #}
+{% set xd = candidate.get('experience_detail') %}
+{% if xd %}
+<section class="card" style="margin-bottom:20px;" aria-labelledby="exp-calc-title">
+  <div class="card-head">
+    <h2 id="exp-calc-title" class="card-title" style="margin:0;">How experience was calculated
+      <span class="hint" title="Months are counted from the dates in the resume, inclusive of start and end month. Overlapping roles count once. Internships are kept separate. Education, projects and certifications are not counted. A year with no month is read as mid-year.">{{ icon('info', 'ico-svg sm') }}</span>
+    </h2>
+    <span class="exp-total">{{ yrs(candidate['experience_months']) }} full-time{% if candidate['internship_months'] %} · {{ yrs(candidate['internship_months']) }} internships{% endif %}{% if xd['approximate'] %} · approx.{% endif %}</span>
+  </div>
+  {% if xd['note'] %}<div class="exp-note">{{ icon('alert', 'ico-svg sm') }}<span>{{ xd['note'] }}</span></div>{% endif %}
+  {% if xd['roles'] %}
+  <div class="table-scroll">
+    <table class="rank-table exp-table">
+      <thead><tr><th scope="col">Role</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="num">Months</th><th scope="col">Counted as</th></tr></thead>
+      <tbody>
+      {% for r in xd['roles'] %}
+        <tr class="{{ 'is-excluded' if r['kind'] == 'excluded' }}">
+          <td><div class="exp-role">{{ r['title'] or '—' }}</div><div class="muted small">{{ r['dates'] }}</div></td>
+          <td>{{ r['from'] }}{% if not r['precise'] %}<span class="muted" title="Only the year is given"> *</span>{% endif %}</td>
+          <td>{{ r['to'] }}</td>
+          <td class="num">{{ r['months'] if r['kind'] != 'excluded' else '—' }}</td>
+          <td>
+            {% if r['kind'] == 'work' %}<span class="exp-kind work">Full-time work</span>
+            {% elif r['kind'] == 'internship' %}<span class="exp-kind intern">Internship</span>
+            {% else %}<span class="exp-kind excluded">Not counted</span>{% endif %}
+            {% if r['reason'] %}<div class="muted small">{{ r['reason'] }}</div>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% if xd['overlap'] %}<p class="muted small" style="margin-top:10px;">{{ xd['overlap'] }} months where roles overlap are counted once.</p>{% endif %}
+  {% if xd['approximate'] %}<p class="muted small" style="margin-top:4px;">* Only the year is given, so it is read as mid-year.</p>{% endif %}
+  {% else %}
+  <p class="muted">No dated roles were found in this resume{% if xd['stated_years'] %}; it states {{ '%g'|format(xd['stated_years']) }}+ years of experience{% endif %}.</p>
+  {% endif %}
+</section>
+{% endif %}
+
 {# ── Section scores ── #}
 <div class="card-head" style="margin-bottom:12px;">
   <h2 class="card-title" style="margin:0;">Section scores

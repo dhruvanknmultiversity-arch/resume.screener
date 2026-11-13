@@ -242,6 +242,7 @@ def init_db():
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS criteria_results TEXT")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS experience_months INTEGER")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS internship_months INTEGER")
+    cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS experience_detail TEXT")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS knockout_failed BOOLEAN DEFAULT FALSE")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS must_met INTEGER")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS must_total INTEGER")
@@ -423,6 +424,7 @@ def process_resume_doc(jd_text, keywords, filename, text, raw, criteria=None):
         "criteria_results": results,
         "experience_months": ev["experience"]["work"],
         "internship_months": ev["experience"]["internship"],
+        "experience_detail": experience_detail(ev["experience"]),
         "knockout_failed": bool(ev["knockouts_failed"]),
         "must_met": ev["must_met"],
         "must_total": ev["must_total"],
@@ -459,14 +461,27 @@ def log_engine_run(cur, scan_id, filename, meta):
             pass
 
 
+def experience_detail(exp):
+    """What the candidate page shows under "How experience was calculated"."""
+    import experience
+    rows = [{"title": r.get("title") or "", "dates": r.get("text") or "", "from": r.get("from"), "to": r.get("to"),
+             "months": r.get("months", 0), "kind": r.get("kind"), "reason": r.get("reason") or "",
+             "precise": bool(r.get("precise", True))} for r in (exp.get("roles") or [])][:25]
+    note = experience.summary_note(exp)
+    if exp.get("cross_check"):
+        note = (note + " " + exp["cross_check"]).strip()
+    return {"roles": rows, "overlap": exp.get("overlap", 0), "approximate": bool(exp.get("approximate")),
+            "stated_years": exp.get("stated_years"), "note": note}
+
+
 def insert_candidate(cur, scan_id, c):
     cur.execute(
         "INSERT INTO candidates (scan_id, filename, name, email, phone, score, grade, status, "
         "section_scores, matched_keywords, missing_keywords, matched_skills, missing_skills, "
         "extra_skills, reasons, file_data, suggestions, passed_checks, warning_checks, "
         "issue_checks, semantic_score, cand_years, criteria_results, experience_months, "
-        "internship_months, knockout_failed, must_met, must_total, current_title) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        "internship_months, knockout_failed, must_met, must_total, current_title, experience_detail) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         (scan_id, c["filename"], c["name"], c["email"], c["phone"], c["score"], c["grade"],
          c["status"], json.dumps(c["section_scores"]), json.dumps(c["matched_keywords"]),
          json.dumps(c["missing_keywords"]), json.dumps(c["matched_skills"]),
@@ -477,7 +492,8 @@ def insert_candidate(cur, scan_id, c):
          c["semantic_score"], c.get("cand_years"),
          json.dumps(c["criteria_results"]) if c.get("criteria_results") is not None else None,
          c.get("experience_months"), c.get("internship_months"), bool(c.get("knockout_failed")),
-         c.get("must_met"), c.get("must_total"), c.get("current_title")),
+         c.get("must_met"), c.get("must_total"), c.get("current_title"),
+         json.dumps(c["experience_detail"]) if c.get("experience_detail") else None),
     )
     log_engine_run(cur, scan_id, c.get("filename"), c.get("engine_meta"))
 
@@ -918,7 +934,7 @@ def candidate_detail(candidate_id):
         "section_scores, matched_keywords, missing_keywords, matched_skills, missing_skills, "
         "extra_skills, reasons, suggestions, passed_checks, warning_checks, issue_checks, "
         "semantic_score, cand_years, criteria_results, experience_months, internship_months, "
-        "knockout_failed, must_met, must_total, current_title, "
+        "knockout_failed, must_met, must_total, current_title, experience_detail, "
         "(file_data IS NOT NULL) AS has_file FROM candidates WHERE id = %s",
         (candidate_id,),
     )
@@ -940,6 +956,7 @@ def candidate_detail(candidate_id):
     candidate["warning_checks"] = json.loads(candidate["warning_checks"]) if candidate["warning_checks"] else []
     candidate["issue_checks"] = json.loads(candidate["issue_checks"]) if candidate["issue_checks"] else []
     candidate["criteria_results"] = json.loads(candidate["criteria_results"]) if candidate.get("criteria_results") else []
+    candidate["experience_detail"] = json.loads(candidate["experience_detail"]) if candidate.get("experience_detail") else None
 
     cur.execute("SELECT id, jd_filename, jd_role, keywords, resume_count, avg_score, created_at, session_name FROM scans WHERE id = %s", (candidate["scan_id"],))
     scan_row = fetchone_dict(cur)
