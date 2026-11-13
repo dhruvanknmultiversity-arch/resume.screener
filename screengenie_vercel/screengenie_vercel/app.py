@@ -24,6 +24,7 @@ from flask import (
 from parsing import (
     extract_text_from_file,
     extract_resumes_from_zip,
+    read_quality,
     top_keywords,
     analyze_resume,
     analyze_resume_with_claude,
@@ -243,6 +244,7 @@ def init_db():
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS experience_months INTEGER")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS internship_months INTEGER")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS experience_detail TEXT")
+    cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS unreadable TEXT")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS knockout_failed BOOLEAN DEFAULT FALSE")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS must_met INTEGER")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS must_total INTEGER")
@@ -605,6 +607,43 @@ def scan_start():
     return jsonify({"scan_id": scan_id})
 
 
+def read_resume(filename, raw):
+    """Text of one resume file -> (text, problem, notes, metas).
+
+    Text that cannot be read (a scanned PDF, an image, unusual fonts) is passed to
+    Claude to transcribe when it is available. `problem` is a plain reason when the
+    file is still unreadable; `notes` are shown on the candidate page."""
+    metas, notes = [], []
+    try:
+        text = extract_text_from_file(filename, io.BytesIO(raw))
+    except Exception:
+        text = ""
+    ok, why = read_quality(text)
+    if not ok and engine.can_transcribe(filename, raw):
+        t2, meta = engine.transcribe_document(raw, filename)
+        metas.append(meta)
+        if read_quality(t2)[0]:
+            return t2, None, ["Text was read from a scanned or image file by Claude; check names and dates."], metas
+        if meta.get("error"):
+            why = f"{why}; Claude could not read it either"
+    if not ok:
+        if any((filename or "").lower().endswith(e) for e in (".png", ".jpg", ".jpeg", ".webp")) \
+                and not engine.llm_available():
+            why = "Image file; it can be read once the Claude API is working"
+        return text, why, notes, metas
+    return text, None, notes, metas
+
+
+def add_unreadable(cur, scan_id, items):
+    if not items:
+        return
+    cur.execute("SELECT unreadable FROM scans WHERE id = %s", (scan_id,))
+    row = cur.fetchone()
+    current = json.loads(row[0]) if row and row[0] else []
+    current += items
+    cur.execute("UPDATE scans SET unreadable = %s WHERE id = %s", (json.dumps(current[:100]), scan_id))
+
+
 @app.route("/scan/<int:scan_id>/batch", methods=["POST"])
 def scan_batch(scan_id):
     db = get_db()
@@ -621,12 +660,18 @@ def scan_batch(scan_id):
     criteria = json.loads(row["criteria"]) if row.get("criteria") else None
 
     files = [f for f in request.files.getlist("resume_files") if f and f.filename]
-    docs = []
+    docs, unreadable, notes_by_file = [], [], {}
     for f in files:
         raw = f.read()
-        text = extract_text_from_file(f.filename, io.BytesIO(raw))
-        if text.strip():
-            docs.append((f.filename, text, raw))
+        text, problem, notes, metas = read_resume(f.filename, raw)
+        for m in metas:
+            log_engine_run(cur, scan_id, f.filename, m)
+        if problem:
+            unreadable.append({"file": f.filename, "reason": problem})
+            continue
+        notes_by_file[f.filename] = notes
+        docs.append((f.filename, text, raw))
+    add_unreadable(cur, scan_id, unreadable)
 
     processed, claude_in_batch = 0, 0
     if docs:
@@ -635,6 +680,7 @@ def scan_batch(scan_id):
                        for n, t, r in docs]
             for fut in concurrent.futures.as_completed(futures):
                 cand, used_claude = fut.result()
+                cand["warning_checks"] = notes_by_file.get(cand["filename"], []) + cand["warning_checks"]
                 insert_candidate(cur, scan_id, cand)
                 processed += 1
                 if used_claude:
@@ -647,7 +693,7 @@ def scan_batch(scan_id):
     )
     db.commit()
     cur.close()
-    return jsonify({"processed": processed, "skipped": len(files) - processed})
+    return jsonify({"processed": processed, "skipped": len(files) - processed, "unreadable": unreadable})
 
 
 @app.route("/scan/<int:scan_id>/finalize", methods=["POST"])
@@ -722,7 +768,7 @@ def scan():
         flash("Please upload a ZIP file of resumes.")
         return redirect(url_for("index"))
     resume_docs = extract_resumes_from_zip(zip_file.stream)
-    resume_docs = [(n, t, r) for n, t, r in resume_docs if t.strip()]
+    resume_docs = [(n, t, r) for n, t, r in resume_docs if read_quality(t)[0]]
     if not resume_docs:
         flash("No readable resumes were found (check file formats: PDF, DOCX, TXT).")
         return redirect(url_for("index"))
@@ -772,7 +818,7 @@ def results(scan_id):
     cur = db.cursor()
     cur.execute(
         "SELECT id, jd_filename, jd_role, keywords, resume_count, avg_score, created_at, "
-        "duration_seconds, engine, session_name, criteria FROM scans WHERE id = %s",
+        "duration_seconds, engine, session_name, criteria, unreadable FROM scans WHERE id = %s",
         (scan_id,),
     )
     scan_row = fetchone_dict(cur)
@@ -799,8 +845,9 @@ def results(scan_id):
 
     keywords = json.loads(scan_row["keywords"])
     criteria = json.loads(scan_row["criteria"]) if scan_row.get("criteria") else []
+    unreadable = json.loads(scan_row["unreadable"]) if scan_row.get("unreadable") else []
     return render_template("results.html", scan=scan_row, candidates=candidates, keywords=keywords,
-                           criteria=criteria)
+                           criteria=criteria, unreadable=unreadable)
 
 
 def _priority_for(status, score):

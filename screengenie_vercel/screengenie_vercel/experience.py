@@ -281,6 +281,10 @@ def extract_roles(resume_text, today=None):
     section, section_name = None, ""
     i = 0
     while i < len(lines):
+        if "\f" in lines[i]:
+            section, section_name = None, ""        # a new column of a two-column page
+            i += 1
+            continue
         line = lines[i].strip()
         if not line:
             i += 1

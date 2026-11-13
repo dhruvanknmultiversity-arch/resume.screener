@@ -52,10 +52,10 @@
       </div>
       <input type="hidden" name="resume_mode" id="resume_mode" value="files">
       <label class="drop" id="files-drop">
-        <input type="file" name="resume_files" id="resume-files" accept=".pdf,.doc,.docx,.txt,.rtf" multiple>
+        <input type="file" name="resume_files" id="resume-files" accept=".pdf,.doc,.docx,.txt,.rtf,.png,.jpg,.jpeg,.webp" multiple>
         <div class="drop-ico">{{ icon('files') }}</div>
         <div class="drop-title">Drop multiple resumes</div>
-        <div class="drop-sub">PDF / DOC / DOCX / TXT · up to 50 at a time</div>
+        <div class="drop-sub">PDF / DOCX / TXT or scanned images · up to 50 at a time</div>
         <div class="drop-list" id="files-list"></div>
       </label>
       <label class="drop hidden" id="zip-drop">
@@ -266,7 +266,7 @@ function httpMsg(res, fallback) {
 const PER_FILE_MAX   = 4.0 * 1024 * 1024;   // a single file bigger than this can't fit one request
 const BATCH_MAX_BYTES = 3.6 * 1024 * 1024;  // keep each request well under the 4.5 MB cap
 const BATCH_MAX_COUNT = 5;                  // and never more than 5 resumes per request
-const SUPPORTED = /\.(pdf|docx?|txt|rtf)$/i;
+const SUPPORTED = /\.(pdf|docx?|txt|rtf|png|jpe?g|webp)$/i;
 
 // Collect resumes from either the file picker or a ZIP (unzipped in-browser).
 // Returns [{name, blob, size}].
@@ -332,7 +332,7 @@ async function runScan(jdFile, mode) {
     const { out: items, dups } = dedupe(rawItems);
     const { batches, skipped, usableCount } = planBatches(items);
 
-    if (usableCount === 0) throw new Error('No usable resumes found (PDF / DOC / DOCX / TXT under 4 MB each).');
+    if (usableCount === 0) throw new Error('No usable resumes found (PDF / DOCX / TXT / images under 4 MB each).');
     if (usableCount > MAX_RESUMES) throw new Error(`Found ${usableCount} resumes. Please keep it to ${MAX_RESUMES} at a time.`);
 
     const total = usableCount;

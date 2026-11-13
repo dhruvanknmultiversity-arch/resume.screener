@@ -159,6 +159,54 @@ def call_json(system, user_content, schema, max_tokens=4000, client=None, meta=N
 
 
 # ---------------------------------------------------------------------------
+# Reading scanned / image resumes
+# ---------------------------------------------------------------------------
+
+TRANSCRIBE_SCHEMA = {
+    "type": "object",
+    "properties": {"readable": {"type": "boolean"}, "text": {"type": "string"}},
+    "required": ["readable", "text"],
+    "additionalProperties": False,
+}
+TRANSCRIBE_SYSTEM = """You transcribe resumes that are scanned or saved as images.
+Return the resume's text exactly as written, in reading order: keep each section heading on its own
+line, keep every job title, organisation and date range on the same line as written, read multi-column
+layouts one column at a time, and do not summarise, correct, translate or add anything.
+Set readable=false and text="" if the file is not a resume or cannot be read."""
+_IMAGE_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp"}
+
+
+def can_transcribe(filename, data):
+    name = (filename or "").lower()
+    is_pdf = name.endswith(".pdf") or (data or b"")[:4] == b"%PDF"
+    is_img = any(name.endswith(ext) for ext in _IMAGE_TYPES)
+    return llm_available() and (is_pdf or is_img) and 0 < len(data or b"") <= 20 * 1024 * 1024
+
+
+def transcribe_document(data, filename, client=None):
+    """Claude reads a scanned PDF or an image resume -> (text, meta). Raises on failure."""
+    import base64
+    meta = new_meta("transcribe")
+    started = time.time()
+    name = (filename or "").lower()
+    b64 = base64.standard_b64encode(data).decode()
+    ext = next((e for e in _IMAGE_TYPES if name.endswith(e)), None)
+    if ext:
+        block = {"type": "image", "source": {"type": "base64", "media_type": _IMAGE_TYPES[ext], "data": b64}}
+    else:
+        block = {"type": "document", "source": {"type": "base64", "media_type": "application/pdf", "data": b64}}
+    try:
+        out = call_json(TRANSCRIBE_SYSTEM, [block, {"type": "text", "text": "Transcribe this resume."}],
+                        TRANSCRIBE_SCHEMA, max_tokens=8000, client=client, meta=meta)
+        meta["path"] = "ai"
+        return (str(out.get("text") or "") if out.get("readable") else ""), meta
+    except Exception as e:
+        meta.update(error=f"{type(e).__name__}: {e}"[:500], seconds=round(time.time() - started, 2))
+        log(f"transcription failed: {type(e).__name__}: {e}")
+        return "", meta
+
+
+# ---------------------------------------------------------------------------
 # Criteria (requisition)
 # ---------------------------------------------------------------------------
 
