@@ -1318,6 +1318,88 @@ def engine_health():
                            failures=failures, config=config)
 
 
+def _rate(agree, n):
+    """Agreement % with a 95% range (Wilson), so a handful of answers isn't over-read."""
+    if not n:
+        return None
+    import math
+    p, z = agree / n, 1.96
+    centre = (p + z * z / (2 * n)) / (1 + z * z / n)
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
+    return {"pct": round(100 * p), "lo": max(0, round(100 * (centre - half))), "hi": min(100, round(100 * (centre + half))),
+            "n": n, "agree": agree}
+
+
+@app.route("/accuracy")
+def accuracy():
+    """How often HR agrees with Screen Genie: overall result, each requirement, experience."""
+    from datetime import timedelta
+    import experience as X
+    period = request.args.get("days", "all")
+    db = get_db()
+    cur = db.cursor()
+    sql = ("SELECT f.target, f.criterion_id, f.label, f.kind, f.engine_path, f.system_value, f.hr_value, f.agree, "
+           "f.note, f.updated_at, f.candidate_id, c.name AS cand_name, s.jd_role "
+           "FROM feedback f LEFT JOIN candidates c ON c.id = f.candidate_id LEFT JOIN scans s ON s.id = f.scan_id")
+    params = ()
+    if period in ("7", "30", "90"):
+        sql += " WHERE f.updated_at >= %s"
+        params = ((datetime.utcnow() - timedelta(days=int(period))).isoformat(),)
+    cur.execute(sql + " ORDER BY f.updated_at DESC", params)
+    rows = fetchall_dict(cur)
+    cur.close()
+
+    overall = [r for r in rows if r["target"] == "overall"]
+    crit = [r for r in rows if r["target"] == "criterion"]
+    exp_rows = [r for r in rows if r["target"] == "experience"]
+    statuses = ["Shortlist", "Review", "Reject"]
+    matrix = {a: {b: 0 for b in statuses} for a in statuses}
+    for r in overall:
+        if r["system_value"] in matrix and r["hr_value"] in statuses:
+            matrix[r["system_value"]][r["hr_value"]] += 1
+
+    def rate(rs):
+        return _rate(sum(1 for r in rs if r["agree"]), len(rs))
+
+    by_kind = {k: rate([r for r in crit if r["kind"] == k]) for k in ("must", "nice", "knockout")}
+    by_engine = {k: rate([r for r in crit if (r["engine_path"] or "unknown") == k]) for k in ("ai", "rule")}
+    said_met = [r for r in crit if r["system_value"] == "met"]
+    said_not = [r for r in crit if r["system_value"] == "not_met"]
+    groups = {}
+    for r in crit:
+        g = groups.setdefault((r["label"] or "").strip().lower(), {"label": r["label"], "n": 0, "wrong": 0})
+        g["n"] += 1
+        g["wrong"] += 0 if r["agree"] else 1
+    hard = sorted([g for g in groups.values() if g["wrong"]], key=lambda g: (-g["wrong"], -g["n"]))[:10]
+
+    errs = []
+    for r in exp_rows:
+        try:
+            sysm, hrm = int(r["system_value"]), int(r["hr_value"])
+        except (TypeError, ValueError):
+            continue
+        errs.append(dict(r, sysm=sysm, hrm=hrm, diff=sysm - hrm))
+    exp_stats = None
+    if errs:
+        n = len(errs)
+        exp_stats = {
+            "n": n,
+            "within3": _rate(sum(1 for e in errs if abs(e["diff"]) <= 3), n),
+            "within6": _rate(sum(1 for e in errs if abs(e["diff"]) <= 6), n),
+            "mae": X.format_duration(round(sum(abs(e["diff"]) for e in errs) / n)),
+            "bias": round(sum(e["diff"] for e in errs) / n),
+        }
+    misses = sorted([e for e in errs if e["diff"]], key=lambda e: -abs(e["diff"]))[:10]
+    corrections = [r for r in rows if not r["agree"]][:15]
+    candidates_checked = len({r["candidate_id"] for r in rows})
+    return render_template(
+        "accuracy.html", active="accuracy", period=period, total=len(rows), candidates_checked=candidates_checked,
+        overall=rate(overall), matrix=matrix, statuses=statuses, crit=rate(crit), by_kind=by_kind,
+        by_engine=by_engine, met_precision=rate(said_met), not_met_precision=rate(said_not), hard=hard,
+        exp_stats=exp_stats, misses=misses, corrections=corrections,
+    )
+
+
 @app.route("/dashboard")
 def dashboard():
     db = get_db()

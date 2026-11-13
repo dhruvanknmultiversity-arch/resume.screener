@@ -725,3 +725,15 @@ h3 { font-size: 16px; font-weight: 800; }
   font: inherit; background: var(--surface, transparent); color: inherit; }
 
 .exp-fix[hidden], .fb-fix[hidden] { display: none !important; }
+
+/* ── Accuracy ── */
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+.seg-btn { padding: 7px 12px; font-size: 12.5px; font-weight: 700; color: var(--muted); text-decoration: none; }
+.seg-btn + .seg-btn { border-left: 1px solid var(--border); }
+.seg-btn.on { background: var(--accent); color: var(--on-accent); }
+.acc-table .num, .acc-matrix .num { text-align: right; font-variant-numeric: tabular-nums; }
+.acc-matrix td.diag { background: var(--good-bg); color: var(--good-text); font-weight: 700; }
+.acc-matrix td.off { background: var(--warn-bg); color: var(--warn-text); font-weight: 700; }
+.acc-matrix th[scope=row] { text-align: left; }
+.acc-table, .acc-matrix { min-width: 420px; }
+@media (max-width: 560px) { .page-head .head-stats { width: 100%; } .seg { flex-wrap: wrap; } }

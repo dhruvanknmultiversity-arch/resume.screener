@@ -1,0 +1,142 @@
+{% extends 'base.html' %}
+{% from '_icons.html' import icon %}
+{% block title %}Accuracy{% endblock %}
+{% block content %}
+{% macro pct(r) -%}{% if r %}{{ r['pct'] }}%{% else %}—{% endif %}{%- endmacro %}
+{% macro range_line(r, what) -%}
+  {%- if r -%}{{ r['agree'] }} of {{ r['n'] }} {{ what }}{% if r['n'] < 30 %} · likely {{ r['lo'] }}–{{ r['hi'] }}%{% endif %}{%- else -%}No answers yet{%- endif -%}
+{%- endmacro %}
+<div class="page-head">
+  <div>
+    <div class="eyebrow">Admin · measured against HR</div>
+    <h1>Accuracy</h1>
+    <p class="lede">How often the P&amp;C team agrees with Screen Genie, from the Right / Wrong answers on candidate pages.
+      With fewer than 30 answers a range is shown, because a few answers can swing the figure a lot.</p>
+  </div>
+  <div class="head-stats">
+    <div class="seg" role="group" aria-label="Period">
+      {% for v, lbl in [('7', '7 days'), ('30', '30 days'), ('90', '90 days'), ('all', 'All time')] %}
+      <a class="seg-btn {{ 'on' if period == v }}" href="{{ url_for('accuracy', days=v) }}" {% if period == v %}aria-current="true"{% endif %}>{{ lbl }}</a>
+      {% endfor %}
+    </div>
+  </div>
+</div>
+
+{% if total == 0 %}
+<div class="card empty">
+  <div class="empty-ico">{{ icon('target') }}</div>
+  <h3>No HR answers yet</h3>
+  <p>Open any candidate and tick <strong>Right</strong> or <strong>Wrong</strong> on the result, each requirement and the experience total. The figures appear here straight away.</p>
+  <a class="primary-btn" href="{{ url_for('history') }}">{{ icon('clock', 'ico-svg sm') }} Open a past scan</a>
+</div>
+{% else %}
+
+<section class="grid-4" aria-label="Summary">
+  <div class="stat-tile accent">
+    <span class="l">Overall result right</span>
+    <span class="v">{{ pct(overall) }}</span>
+    <span class="muted">{{ range_line(overall, 'candidates') }}</span>
+  </div>
+  <div class="stat-tile">
+    <span class="l">Requirements right</span>
+    <span class="v">{{ pct(crit) }}</span>
+    <span class="muted">{{ range_line(crit, 'checks') }}</span>
+  </div>
+  <div class="stat-tile">
+    <span class="l">Experience within 3 months</span>
+    <span class="v">{{ pct(exp_stats['within3']) if exp_stats else '—' }}</span>
+    <span class="muted">{% if exp_stats %}{{ range_line(exp_stats['within3'], 'candidates') }} · typical miss {{ exp_stats['mae'] }}{% else %}No answers yet{% endif %}</span>
+  </div>
+  <div class="stat-tile">
+    <span class="l">Answers so far</span>
+    <span class="v">{{ total }}</span>
+    <span class="muted">on {{ candidates_checked }} candidate{{ 's' if candidates_checked != 1 }}</span>
+  </div>
+</section>
+
+<div class="grid-2">
+  <section class="card" aria-labelledby="req-title">
+    <h2 id="req-title" class="card-title">Requirements, in detail</h2>
+    <div class="table-scroll"><table class="rank-table acc-table">
+      <thead><tr><th scope="col">Group</th><th scope="col" class="num">Right</th><th scope="col">Answers</th></tr></thead>
+      <tbody>
+        {% for lbl, r in [('Must-haves', by_kind['must']), ('Nice-to-haves', by_kind['nice']), ('Knockouts', by_kind['knockout']),
+                          ('Screened by Claude', by_engine['ai']), ('Screened by the backup', by_engine['rule']),
+                          ('When Screen Genie said "Met"', met_precision), ('When Screen Genie said "Not met"', not_met_precision)] %}
+        <tr>
+          <td>{{ lbl }}</td>
+          <td class="num"><strong>{{ pct(r) }}</strong></td>
+          <td class="muted small">{{ range_line(r, 'right') }}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+  </section>
+
+  <section class="card" aria-labelledby="mx-title">
+    <h2 id="mx-title" class="card-title">Overall result: Screen Genie vs HR</h2>
+    {% if overall %}
+    <div class="table-scroll"><table class="rank-table acc-matrix">
+      <thead><tr><th scope="col">Screen Genie said</th>{% for s in statuses %}<th scope="col" class="num">HR: {{ s }}</th>{% endfor %}</tr></thead>
+      <tbody>
+        {% for a in statuses %}
+        <tr><th scope="row">{{ a }}</th>{% for b in statuses %}<td class="num {{ ('diag' if a == b else 'off') if matrix[a][b] else '' }}">{{ matrix[a][b] }}</td>{% endfor %}</tr>
+        {% endfor %}
+      </tbody>
+    </table></div>
+    <p class="muted small" style="margin-top:10px;">Green cells agree. A number under "HR: Shortlist" in the Reject row is a good candidate Screen Genie would have missed.</p>
+    {% else %}<p class="muted">No answers on the overall result yet.</p>{% endif %}
+    {% if exp_stats %}
+    <h3 class="card-title small" style="margin-top:18px;">Experience</h3>
+    <p class="small" style="margin:4px 0;">Within 3 months: <strong>{{ pct(exp_stats['within3']) }}</strong> · within 6 months: <strong>{{ pct(exp_stats['within6']) }}</strong> · typical miss {{ exp_stats['mae'] }}
+      {% if exp_stats['bias'] %} · tends to {{ 'over' if exp_stats['bias'] > 0 else 'under' }}count by {{ exp_stats['bias']|abs|duration }}{% endif %}</p>
+    {% endif %}
+  </section>
+</div>
+
+<div class="grid-2">
+  <section class="card" aria-labelledby="hard-title">
+    <h2 id="hard-title" class="card-title">Requirements Screen Genie gets wrong most</h2>
+    {% if hard %}
+    <div class="table-scroll"><table class="rank-table acc-table">
+      <thead><tr><th scope="col">Requirement</th><th scope="col" class="num">Wrong</th><th scope="col" class="num">Answers</th></tr></thead>
+      <tbody>{% for g in hard %}<tr><td>{{ g['label'] }}</td><td class="num"><strong>{{ g['wrong'] }}</strong></td><td class="num">{{ g['n'] }}</td></tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<p class="muted">No requirement has been marked wrong yet.</p>{% endif %}
+  </section>
+
+  <section class="card" aria-labelledby="miss-title">
+    <h2 id="miss-title" class="card-title">Biggest experience misses</h2>
+    {% if misses %}
+    <div class="table-scroll"><table class="rank-table acc-table">
+      <thead><tr><th scope="col">Candidate</th><th scope="col">Screen Genie</th><th scope="col">HR</th></tr></thead>
+      <tbody>{% for e in misses %}<tr>
+        <td><a href="{{ url_for('candidate_detail', candidate_id=e['candidate_id']) }}">{{ e['cand_name'] or 'Candidate' }}</a><div class="muted small">{{ e['jd_role'] or '' }}</div></td>
+        <td>{{ e['sysm']|duration }}</td><td><strong>{{ e['hrm']|duration }}</strong></td></tr>{% endfor %}</tbody>
+    </table></div>
+    {% else %}<p class="muted">No experience corrections yet.</p>{% endif %}
+  </section>
+</div>
+
+<section class="card" aria-labelledby="corr-title">
+  <h2 id="corr-title" class="card-title">Latest corrections</h2>
+  {% if corrections %}
+  <div class="table-scroll"><table class="rank-table acc-table">
+    <thead><tr><th scope="col">Candidate</th><th scope="col">What</th><th scope="col">Screen Genie</th><th scope="col">HR</th><th scope="col">When (UTC)</th></tr></thead>
+    <tbody>
+      {% set vlabel = {'met': 'Met', 'partial': 'Partial', 'not_met': 'Not met'} %}
+      {% for r in corrections %}
+      <tr>
+        <td><a href="{{ url_for('candidate_detail', candidate_id=r['candidate_id']) }}">{{ r['cand_name'] or 'Candidate' }}</a></td>
+        <td>{{ r['label'] }}</td>
+        <td>{% if r['target'] == 'experience' %}{{ (r['system_value']|int)|duration }}{% else %}{{ vlabel.get(r['system_value'], r['system_value']) }}{% endif %}</td>
+        <td><strong>{% if r['target'] == 'experience' %}{{ (r['hr_value']|int)|duration }}{% else %}{{ vlabel.get(r['hr_value'], r['hr_value']) }}{% endif %}</strong></td>
+        <td class="muted small">{{ (r['updated_at'] or '')[:16]|replace('T', ' ') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table></div>
+  {% else %}<p class="muted">No corrections: HR has agreed with everything so far.</p>{% endif %}
+</section>
+{% endif %}
+{% endblock %}

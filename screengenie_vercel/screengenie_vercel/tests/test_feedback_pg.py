@@ -58,3 +58,11 @@ def test_feedback_round_trip(client):
     assert fb(target="overall", clear=True)[1]["cleared"] is True
     page = client.get(f"/candidate/{cid}").data.decode()
     assert "2 of 5 checks answered" in page       # result + 3 requirements + experience
+
+
+def test_accuracy_page_reports_answers(client):
+    r = client.get("/accuracy")
+    page = r.data.decode()
+    assert r.status_code == 200 and "Overall result right" in page and "Latest corrections" in page
+    for d in ("7", "30", "90", "all"):
+        assert client.get(f"/accuracy?days={d}").status_code == 200

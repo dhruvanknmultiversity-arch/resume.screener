@@ -47,6 +47,7 @@
       <a class="nav-item {% if active=='history' %}active{% endif %}" href="{{ url_for('history') }}" {% if active=='history' %}aria-current="page"{% endif %}>{{ icon('clock') }} Scan History</a>
       <span class="nav-label" style="margin-top:14px;">ADMIN</span>
       <a class="nav-item {% if active=='engine' %}active{% endif %}" href="{{ url_for('engine_health') }}" {% if active=='engine' %}aria-current="page"{% endif %}>{{ icon('cpu') }} Engine health</a>
+      <a class="nav-item {% if active=='accuracy' %}active{% endif %}" href="{{ url_for('accuracy') }}" {% if active=='accuracy' %}aria-current="page"{% endif %}>{{ icon('target') }} Accuracy</a>
     </nav>
 
     <div class="side-foot">
