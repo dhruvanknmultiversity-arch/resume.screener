@@ -43,7 +43,10 @@ class FakeClient:
     def create(self, **kw):
         self.calls.append(kw)
         text = self.payload if isinstance(self.payload, str) else json.dumps(self.payload)
-        return SimpleNamespace(stop_reason="end_turn", content=[SimpleNamespace(type="text", text=text)])
+        usage = SimpleNamespace(input_tokens=1200, output_tokens=800, cache_read_input_tokens=3000,
+                                cache_creation_input_tokens=0)
+        return SimpleNamespace(stop_reason="end_turn", model="claude-sonnet-5-5", usage=usage,
+                               content=[SimpleNamespace(type="text", text=text)])
 
 
 def fake_eval(**overrides):
@@ -178,3 +181,52 @@ def test_app_pipeline_uses_criteria(monkeypatch):
         [{"start": "2025-07", "end": "present"}])["work"]
     assert cand["reasons"][0].startswith("Does not meet a knockout requirement")
     assert any("Ask for a concrete example" in q for q in cand["suggestions"])
+
+
+# --- engine health (Day 1) ---------------------------------------------------
+
+def test_meta_records_tokens_cost_and_path():
+    ev = engine.evaluate_resume("JD", CRITERIA, RESUME, client=FakeClient(fake_eval()), today=TODAY)
+    m = ev["meta"]
+    assert m["path"] == "ai" and m["model"] == "claude-sonnet-5-5" and m["error"] is None
+    assert (m["input_tokens"], m["output_tokens"], m["cache_read_tokens"]) == (1200, 800, 3000)
+    expected = (1200 * engine.PRICE_IN + 800 * engine.PRICE_OUT + 3000 * engine.PRICE_CACHE_READ) / 1e6
+    assert abs(m["cost_usd"] - expected) < 1e-9 and m["attempts"] == 1
+
+
+def test_meta_records_fallback_reason():
+    ev = engine.evaluate_resume("JD", CRITERIA, RESUME, client=FakeClient("{broken"), today=TODAY)
+    assert ev["meta"]["path"] == "rule" and "JSONDecodeError" in ev["meta"]["error"]
+    d = engine.draft_requisition("Need python and sql.", client=FakeClient("nope"))
+    assert d["meta"]["kind"] == "requisition" and d["meta"]["path"] == "rule" and d["meta"]["error"]
+
+
+def test_engine_run_is_logged_and_page_renders():
+    os.environ.update(SECRET_KEY="x" * 40, TEAM_PASSWORD="hunter2-team-pass")
+    for m in ("app", "auth"):
+        sys.modules.pop(m, None)
+    import app as app_module
+
+    class Cur:
+        def __init__(self): self.rows = []
+        def execute(self, sql, params=None): self.rows.append((sql, params))
+    cur = Cur()
+    meta = dict(engine.new_meta("resume"), path="ai", model="claude-sonnet-5-5", cost_usd=0.02, seconds=4.2)
+    app_module.log_engine_run(cur, 7, "a.pdf", meta)
+    sql, params = cur.rows[0]
+    assert "INSERT INTO engine_runs" in sql and params[1] == 7 and params[3] == "ai" and params[5] == "a.pdf"
+    app_module.log_engine_run(cur, 7, "a.pdf", None)          # nothing to log, no error
+    assert len(cur.rows) == 1
+
+    from flask import render_template
+    stats = dict(runs=10, ai=9, rule=1, ai_share=90, p50=6.1, p95=14.8, cost_inr=21.5, cost_per_resume_inr=2.1,
+                 avg_in=6200, avg_out=1400, cache_share=40, req_runs=2, req_ai=2)
+    config = dict(model="claude-sonnet-5-5", effort="low", api_key=True, parallel="5", timeout=55.0,
+                  version="sg-engine-2.0", usd_inr=88.0, price_in=2.0, price_out=10.0)
+    days = [dict(day="2026-11-13", resumes=10, ai=9, rule=1, cost=0.24)]
+    failures = [dict(created_at="2026-11-13T09:00:00", kind="resume", path="rule", filename="b.pdf", scan_id=7,
+                     error="RateLimitError: too many requests")]
+    with app_module.app.test_request_context("/engine-health"):
+        html = render_template("engine_health.html", active="engine", stats=stats, days=days,
+                               failures=failures, config=config)
+    assert "90%" in html and "RateLimitError" in html and "₹2.10" in html and "Engine health" in html

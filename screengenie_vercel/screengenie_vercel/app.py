@@ -1,4 +1,5 @@
 import os
+import sys
 import io
 import csv
 import json
@@ -245,6 +246,27 @@ def init_db():
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS must_met INTEGER")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS must_total INTEGER")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS current_title TEXT")
+    # Engine health log: one row per model call or fallback (Day 1)
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS engine_runs (
+            id SERIAL PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            scan_id INTEGER,
+            kind TEXT NOT NULL,
+            path TEXT NOT NULL,
+            model TEXT,
+            filename TEXT,
+            input_tokens INTEGER DEFAULT 0,
+            output_tokens INTEGER DEFAULT 0,
+            cache_read_tokens INTEGER DEFAULT 0,
+            cache_write_tokens INTEGER DEFAULT 0,
+            seconds REAL DEFAULT 0,
+            cost_usd REAL DEFAULT 0,
+            attempts INTEGER DEFAULT 0,
+            error TEXT
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS engine_runs_created_idx ON engine_runs (created_at)")
     cur.execute("""
         CREATE TABLE IF NOT EXISTS jd_analyses (
             id SERIAL PRIMARY KEY,
@@ -333,6 +355,9 @@ def _legacy_candidate(jd_text, keywords, filename, text, raw):
         "issue_checks": analysis.get("issue_checks", []),
         "semantic_score": analysis.get("semantic_score", 0),
         "cand_years": analysis.get("cand_years"),
+        "engine_meta": dict(engine.new_meta("resume"), path="ai" if used_claude else "rule",
+                            model=os.environ.get("CLAUDE_MODEL") if used_claude else None,
+                            error=None if used_claude else "legacy path: no requirement checklist"),
         "raw": raw,
     }, used_claude
 
@@ -402,8 +427,27 @@ def process_resume_doc(jd_text, keywords, filename, text, raw, criteria=None):
         "must_met": ev["must_met"],
         "must_total": ev["must_total"],
         "current_title": ev.get("current_title") or None,
+        "engine_meta": ev.get("meta"),
         "raw": raw,
     }, ev["engine"] == "ai"
+
+
+def log_engine_run(cur, scan_id, filename, meta):
+    """Store one engine run for the Engine health page. Never breaks a scan."""
+    if not meta:
+        return
+    try:
+        cur.execute(
+            "INSERT INTO engine_runs (created_at, scan_id, kind, path, model, filename, input_tokens, "
+            "output_tokens, cache_read_tokens, cache_write_tokens, seconds, cost_usd, attempts, error) "
+            "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+            (datetime.utcnow().isoformat(), scan_id, meta.get("kind", "resume"), meta.get("path", "rule"),
+             meta.get("model"), (filename or "")[:255], meta.get("input_tokens", 0), meta.get("output_tokens", 0),
+             meta.get("cache_read_tokens", 0), meta.get("cache_write_tokens", 0), meta.get("seconds", 0),
+             meta.get("cost_usd", 0), meta.get("attempts", 0), (meta.get("error") or None)),
+        )
+    except Exception as e:  # logging must never fail a scan
+        print(f"[screen-genie] engine_runs insert failed: {type(e).__name__}: {e}", file=sys.stderr)
 
 
 def insert_candidate(cur, scan_id, c):
@@ -426,6 +470,7 @@ def insert_candidate(cur, scan_id, c):
          c.get("experience_months"), c.get("internship_months"), bool(c.get("knockout_failed")),
          c.get("must_met"), c.get("must_total"), c.get("current_title")),
     )
+    log_engine_run(cur, scan_id, c.get("filename"), c.get("engine_meta"))
 
 
 @app.route("/requisition/draft", methods=["POST"])
@@ -439,6 +484,14 @@ def requisition_draft():
         return jsonify({"error": "Could not read text from the job description file."}), 400
     draft = engine.draft_requisition(jd_text, request.form.get("context", ""))
     draft["role_title"] = draft.get("role_title") or guess_role(jd_text, jd_file.filename)
+    meta = draft.pop("meta", None)
+    try:
+        db = get_db()
+        cur = db.cursor()
+        log_engine_run(cur, None, jd_file.filename, meta)
+        db.commit()
+    except Exception as e:
+        print(f"[screen-genie] could not log requisition run: {e}", file=sys.stderr)
     return jsonify(draft)
 
 
@@ -468,9 +521,11 @@ def scan_start():
     # The recruiter's reviewed checklist; drafted here if the browser sent none.
     criteria = engine.parse_criteria_json(request.form.get("criteria_json"))
     role_title = (request.form.get("role_title") or "").strip()[:120]
+    draft_meta = None
     if not criteria:
         draft = engine.draft_requisition(jd_text)
         criteria = draft["criteria"]
+        draft_meta = draft.get("meta")
         role_title = role_title or draft.get("role_title", "")
     jd_role = role_title or guess_role(jd_text, jd_file.filename)
 
@@ -485,6 +540,7 @@ def scan_start():
          json.dumps(criteria) if criteria else None, engine.ENGINE_VERSION),
     )
     scan_id = cur.fetchone()[0]
+    log_engine_run(cur, scan_id, jd_file.filename, draft_meta)
     db.commit()
     cur.close()
     return jsonify({"scan_id": scan_id})
@@ -968,6 +1024,85 @@ def delete_scan(scan_id):
     cur.close()
     flash("Scan deleted.")
     return redirect(url_for("history"))
+
+
+@app.route("/engine-health")
+def engine_health():
+    """Is Claude really screening, how fast, and what does it cost? (Day 1)"""
+    from datetime import timedelta
+    db = get_db()
+    cur = db.cursor()
+    since7 = (datetime.utcnow() - timedelta(days=7)).isoformat()
+    since14 = (datetime.utcnow() - timedelta(days=14)).isoformat()
+
+    cur.execute("""
+        SELECT COUNT(*) AS runs,
+               COUNT(*) FILTER (WHERE path = 'ai') AS ai,
+               COUNT(*) FILTER (WHERE path <> 'ai') AS rule,
+               COALESCE(SUM(cost_usd), 0) AS cost,
+               COALESCE(AVG(cost_usd) FILTER (WHERE path = 'ai'), 0) AS cost_per_ai,
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY seconds) FILTER (WHERE path = 'ai') AS p50,
+               percentile_cont(0.95) WITHIN GROUP (ORDER BY seconds) FILTER (WHERE path = 'ai') AS p95,
+               COALESCE(AVG(input_tokens + cache_read_tokens + cache_write_tokens) FILTER (WHERE path = 'ai'), 0) AS avg_in,
+               COALESCE(AVG(output_tokens) FILTER (WHERE path = 'ai'), 0) AS avg_out,
+               COALESCE(SUM(cache_read_tokens), 0) AS cache_read,
+               COALESCE(SUM(input_tokens + cache_read_tokens + cache_write_tokens), 0) AS all_in
+        FROM engine_runs WHERE kind = 'resume' AND created_at >= %s
+    """, (since7,))
+    r = cur.fetchone()
+    cur.execute("""
+        SELECT COUNT(*) AS runs, COUNT(*) FILTER (WHERE path = 'ai') AS ai
+        FROM engine_runs WHERE kind = 'requisition' AND created_at >= %s
+    """, (since7,))
+    q = cur.fetchone()
+    cur.execute("""
+        SELECT SUBSTRING(created_at, 1, 10) AS day,
+               COUNT(*) FILTER (WHERE kind = 'resume') AS resumes,
+               COUNT(*) FILTER (WHERE kind = 'resume' AND path = 'ai') AS ai,
+               COUNT(*) FILTER (WHERE kind = 'resume' AND path <> 'ai') AS rule,
+               COALESCE(SUM(cost_usd), 0) AS cost
+        FROM engine_runs WHERE created_at >= %s
+        GROUP BY 1 ORDER BY 1 DESC
+    """, (since14,))
+    days = cur.fetchall()
+    cur.execute("""
+        SELECT created_at, kind, path, filename, scan_id, error
+        FROM engine_runs WHERE error IS NOT NULL
+        ORDER BY id DESC LIMIT 25
+    """)
+    failures = cur.fetchall()
+    cur.close()
+
+    usd_inr = float(os.environ.get("SG_USD_INR", "88"))
+    runs = r["runs"] or 0
+    stats = {
+        "runs": runs,
+        "ai": r["ai"] or 0,
+        "rule": r["rule"] or 0,
+        "ai_share": round(100.0 * (r["ai"] or 0) / runs) if runs else None,
+        "p50": round(r["p50"], 1) if r["p50"] is not None else None,
+        "p95": round(r["p95"], 1) if r["p95"] is not None else None,
+        "cost_inr": round(float(r["cost"]) * usd_inr, 2),
+        "cost_per_resume_inr": round(float(r["cost_per_ai"]) * usd_inr, 2) if r["ai"] else None,
+        "avg_in": int(r["avg_in"] or 0),
+        "avg_out": int(r["avg_out"] or 0),
+        "cache_share": round(100.0 * r["cache_read"] / r["all_in"]) if r["all_in"] else None,
+        "req_runs": q["runs"] or 0,
+        "req_ai": q["ai"] or 0,
+    }
+    config = {
+        "model": engine.MODEL,
+        "effort": engine.EFFORT,
+        "api_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
+        "parallel": os.environ.get("SG_PARALLEL", "5"),
+        "timeout": engine.CALL_TIMEOUT,
+        "version": engine.ENGINE_VERSION,
+        "usd_inr": usd_inr,
+        "price_in": engine.PRICE_IN,
+        "price_out": engine.PRICE_OUT,
+    }
+    return render_template("engine_health.html", active="engine", stats=stats, days=days,
+                           failures=failures, config=config)
 
 
 @app.route("/dashboard")
