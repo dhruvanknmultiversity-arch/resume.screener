@@ -461,6 +461,13 @@ def log_engine_run(cur, scan_id, filename, meta):
             pass
 
 
+@app.template_filter("duration")
+def duration_filter(months):
+    """{{ 113|duration }} -> "9 yrs 5 mos"."""
+    import experience
+    return experience.format_duration(months)
+
+
 def experience_detail(exp):
     """What the candidate page shows under "How experience was calculated"."""
     import experience
@@ -780,7 +787,7 @@ def _priority_for(status, score):
 
 EXPORT_COLUMNS = [
     ("Rank", 6), ("Priority", 10), ("Score", 7), ("Grade", 7), ("Status", 11),
-    ("Candidate Name", 24), ("Email", 30), ("Phone", 18), ("Experience (yrs)", 15),
+    ("Candidate Name", 24), ("Email", 30), ("Phone", 18), ("Experience", 16), ("Experience (months)", 12),
     ("Skills Matched", 14), ("Skills Missing", 14), ("Matched Skills", 46),
     ("Missing Skills", 46), ("Resume File", 30),
 ]
@@ -797,7 +804,7 @@ def _export_rows(scan_id):
         cur.close()
         return None, None
     cur.execute(
-        "SELECT score, grade, status, name, email, phone, filename, cand_years, "
+        "SELECT score, grade, status, name, email, phone, filename, cand_years, experience_months, "
         "matched_skills, missing_skills FROM candidates "
         "WHERE scan_id = %s ORDER BY score DESC, COALESCE(semantic_score,0) DESC, id ASC",
         (scan_id,),
@@ -814,7 +821,10 @@ def _export_rows(scan_id):
             "priority": _priority_for(r["status"], r["score"]),
             "score": r["score"], "grade": r["grade"], "status": r["status"],
             "name": r["name"], "email": r["email"], "phone": r["phone"],
-            "experience": (f"{yrs}" if yrs is not None else "—"),
+            "experience": (duration_filter(r["experience_months"]) if r.get("experience_months") is not None
+                           else (f"{yrs} yrs" if yrs is not None else "—")),
+            "experience_months": (r["experience_months"] if r.get("experience_months") is not None
+                                  else (yrs * 12 if yrs is not None else None)),
             "n_matched": len(matched), "n_missing": len(missing),
             "matched": ", ".join(matched), "missing": ", ".join(missing),
             "file": r["filename"],
@@ -875,14 +885,14 @@ def export_results_xlsx(scan_id):
         for idx, r in enumerate(rows):
             rr = header_row + 1 + idx
             values = [r["rank"], r["priority"], r["score"], r["grade"], r["status"],
-                      r["name"], r["email"], r["phone"], r["experience"],
+                      r["name"], r["email"], r["phone"], r["experience"], r["experience_months"],
                       r["n_matched"], r["n_missing"], r["matched"], r["missing"], r["file"]]
             for col, val in enumerate(values, 1):
                 cell = ws.cell(row=rr, column=col, value=val)
                 cell.border = border
                 cell.alignment = Alignment(
-                    horizontal="center" if col in (1, 2, 3, 4, 5, 9, 10, 11) else "left",
-                    vertical="top", wrap_text=col in (12, 13),
+                    horizontal="center" if col in (1, 2, 3, 4, 5, 9, 10, 11, 12) else "left",
+                    vertical="top", wrap_text=col in (13, 14),
                 )
                 if col == 2:  # priority colouring
                     cell.fill = PatternFill("solid", fgColor=prio_fill[r["priority"]])
@@ -913,7 +923,7 @@ def export_results_xlsx(scan_id):
         w.writerow([n for n, _ in EXPORT_COLUMNS])
         for r in rows:
             w.writerow([r["rank"], r["priority"], r["score"], r["grade"], r["status"],
-                        r["name"], r["email"], r["phone"], r["experience"],
+                        r["name"], r["email"], r["phone"], r["experience"], r["experience_months"],
                         r["n_matched"], r["n_missing"], r["matched"], r["missing"], r["file"]])
         return Response(buf.getvalue(), mimetype="text/csv",
                         headers={"Content-Disposition": f"attachment; filename=ScreenGenie_scan_{scan_id}.csv"})

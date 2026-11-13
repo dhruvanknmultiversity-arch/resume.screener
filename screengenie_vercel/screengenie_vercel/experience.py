@@ -98,6 +98,29 @@ def _ym(y, m):
     return y * 12 + (m - 1)
 
 
+def format_duration(months, long=False):
+    """12 -> "1 yr", 113 -> "9 yrs 5 mos", 3 -> "3 mos", 0 -> "0 mos".
+    long=True gives "9 years 5 months" for sentences."""
+    if months is None:
+        return "—"
+    months = max(0, int(round(months)))
+    y, m = divmod(months, 12)
+    if long:
+        yt = f"{y} year{'s' if y != 1 else ''}"
+        mt = f"{m} month{'s' if m != 1 else ''}"
+    else:
+        yt = f"{y} yr{'s' if y != 1 else ''}"
+        mt = f"{m} mo{'s' if m != 1 else ''}"
+    if y and m:
+        return f"{yt} {mt}"
+    return yt if y else mt
+
+
+def format_years(years, long=True):
+    """A requirement like 3 or 2.5 years -> "3 years" / "2 years 6 months"."""
+    return format_duration(round(float(years) * 12), long=long)
+
+
 def ym_label(v):
     return f"{list(MONTHS)[v % 12].title()} {v // 12}"
 
@@ -459,7 +482,7 @@ def summary_note(exp):
     years = exp["work"] / 12.0
     st = exp.get("stated_years")
     if st is not None and exp["work"] and abs(st - years) >= 1.5:
-        notes.append(f"Resume states {st:g}+ years; dated roles add up to {years:.1f} years.")
+        notes.append(f"Resume states {st:g}+ years; dated roles add up to {format_duration(exp['work'], long=True)}.")
     if st is not None and not exp["work"] and not exp["internship"]:
         notes.append(f"Resume states {st:g}+ years but gives no dated roles to check it.")
     return " ".join(notes)

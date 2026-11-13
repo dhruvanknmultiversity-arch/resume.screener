@@ -37,7 +37,7 @@
 <div class="card kw-card">
   <div class="card-title small">Requirements checked for every resume</div>
   <div class="crit-chips">
-    {% for c in criteria %}<span class="crit-chip {{ c['kind'] }}"><span class="k">{{ {'must': 'Must', 'nice': 'Nice', 'knockout': 'Knockout'}[c['kind']] }}</span>{{ c['label'] }}{% if c['min_years'] %} · {{ '%g'|format(c['min_years']) }}+ yrs{% endif %}</span>{% endfor %}
+    {% for c in criteria %}<span class="crit-chip {{ c['kind'] }}"><span class="k">{{ {'must': 'Must', 'nice': 'Nice', 'knockout': 'Knockout'}[c['kind']] }}</span>{{ c['label'] }}{% if c['min_years'] %} · {{ (c['min_years'] * 12)|duration }}+{% endif %}</span>{% endfor %}
   </div>
 </div>
 {% else %}
@@ -105,7 +105,7 @@
             <span class="avatar" aria-hidden="true">{{ (parts[0][:1] ~ (parts[-1][:1] if parts|length > 1 else ''))|upper }}</span>
             <div style="min-width:0;">
               <div class="cand-name"><a href="{{ url_for('candidate_detail', candidate_id=c['id']) }}">{{ c['name'] }}</a></div>
-              <div class="cand-file" title="{{ c['filename'] }}">{{ c['current_title'] or c['filename'] }}{% if c['experience_months'] is not none and c['must_total'] %} · {{ '%.1f'|format(c['experience_months'] / 12) }} yrs work{% endif %}</div>
+              <div class="cand-file" title="{{ c['filename'] }}">{{ c['current_title'] or c['filename'] }}{% if c['experience_months'] is not none and c['must_total'] %} · {{ c['experience_months']|duration }} work{% endif %}</div>
             </div>
           </div>
         </td>
