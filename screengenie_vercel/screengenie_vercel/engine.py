@@ -235,16 +235,93 @@ def parse_criteria_json(raw):
     return _clean_criteria(data if isinstance(data, list) else [])
 
 
+_SKILL_DISPLAY = {
+    "sql": "SQL", "aws": "AWS", "gcp": "GCP", "etl": "ETL", "seo": "SEO", "sem": "SEM", "crm": "CRM",
+    "gst": "GST", "tds": "TDS", "sap": "SAP", "nlp": "NLP", "css": "CSS", "html": "HTML", "php": "PHP",
+    "r": "R", "c++": "C++", "c#": "C#", "ci/cd": "CI/CD", "power bi": "Power BI", "node.js": "Node.js",
+    "next.js": "Next.js", "scikit-learn": "scikit-learn", "pytorch": "PyTorch", "tensorflow": "TensorFlow",
+    "mysql": "MySQL", "postgresql": "PostgreSQL", "mongodb": "MongoDB", "javascript": "JavaScript",
+    "typescript": "TypeScript", "graphql": "GraphQL", "rest api": "REST API", "nosql": "NoSQL",
+    "a/b testing": "A/B testing", "ms office": "MS Office", "powerpoint": "PowerPoint", "word": "MS Word",
+    "jira": "Jira", "testng": "TestNG", "junit": "JUnit", "quickbooks": "QuickBooks", "hr policies": "HR policies",
+}
+# generic soft skills never become checklist items on their own
+_SOFT_SKILLS = {"communication", "teamwork", "leadership", "problem solving", "time management"}
+_NICE_RE = re.compile(r"nice[\s-]to[\s-]have|good[\s-]to[\s-]have|\bpreferred\b|\bpreferably\b|\bbonus\b|"
+                      r"\ba plus\b|\bplus point\b|\bdesirable\b|added advantage|\bwould be great\b", re.I)
+_MUST_RE = re.compile(r"must[\s-]have|\brequired\b|\brequirements?\b|\bmandatory\b|\bessential\b|"
+                      r"\bqualifications?\b|\bshould have\b|\bwhat you need\b", re.I)
+
+
+def skill_display(canonical):
+    return _SKILL_DISPLAY.get(canonical, canonical[:1].upper() + canonical[1:])
+
+
 def rule_requisition(jd_text):
-    from parsing import extract_skills, required_years
-    skills = extract_skills(jd_text)
-    crit = [{"label": s, "kind": "must" if i < 5 else "nice", "weight": 2 if i < 5 else 1, "min_years": 0}
-            for i, s in enumerate(skills[:9])]
+    """Fallback checklist: skills in the JD, grouped into "X or Y" where the JD offers a choice,
+    marked nice-to-have when they sit under a "nice to have / preferred" heading or sentence."""
+    from parsing import ALIAS_TO_CANONICAL, extract_skills, required_years
+
+    def ordered_skills(text):
+        low = " " + text.lower() + " "
+        def pos(sk):
+            ps = [m.start() for a, cc in ALIAS_TO_CANONICAL.items() if cc == sk
+                  for m in [re.search(r"(?<![a-z0-9])" + re.escape(a) + r"(?![a-z0-9])", low)] if m]
+            return min(ps) if ps else 10 ** 6
+        return sorted((s for s in extract_skills(text) if s not in _SOFT_SKILLS), key=pos)
+
+    items, seen = [], set()
+    mode = "must"
+    for raw in (jd_text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        nice_hit, must_hit = _NICE_RE.search(line), _MUST_RE.search(line)
+        if nice_hit and (not must_hit or nice_hit.start() > must_hit.start()):
+            line_mode = "nice"
+        elif must_hit:
+            line_mode = "must"
+        else:
+            line_mode = mode
+        # a heading such as "Nice to have:" with nothing after it sets the mode for the lines below
+        if re.fullmatch(r"[^a-z0-9]*[\w\s/&()'-]{0,40}:?\s*", line, flags=re.I) and (nice_hit or must_hit):
+            mode = line_mode
+            continue
+        if nice_hit or must_hit:
+            mode = line_mode
+        for clause in re.split(r"[;.\n]|,(?![^()]*\))", line):
+            sk = ordered_skills(clause)
+            if not sk:
+                continue
+            # skills joined by "or" / "either" in one clause are alternatives
+            if len(sk) > 1 and re.search(r"\bor\b|\beither\b|\bany of\b", clause, re.I):
+                groups = [sk]
+            else:
+                groups = [[x] for x in sk]
+            for g in groups:
+                key = tuple(sorted(g))
+                if key in seen or any(x in {y for k in seen for y in k} for x in g) and len(g) == 1:
+                    continue
+                seen.add(key)
+                items.append({"label": " or ".join(skill_display(x) for x in g), "kind": line_mode})
+
+    musts = [i for i in items if i["kind"] == "must"][:7]
+    nices = [i for i in items if i["kind"] == "nice"][:5]
+    crit = [dict(i, weight=2, min_years=0) for i in musts] + [dict(i, weight=1, min_years=0) for i in nices]
     years = required_years(jd_text)
     if years:
         crit.insert(0, {"label": f"At least {years} years of relevant experience", "kind": "must",
                         "weight": 3, "min_years": years})
-    return {"role_title": "", "seniority": "Unknown", "criteria": _clean_criteria(crit), "engine": "rule"}
+    return {"role_title": _guess_title(jd_text), "seniority": "Unknown",
+            "criteria": _clean_criteria(crit), "engine": "rule"}
+
+
+def _guess_title(jd_text):
+    for raw in (jd_text or "").splitlines()[:5]:
+        line = re.sub(r"^(job title|role|position)\s*[:\-]\s*", "", raw.strip(), flags=re.I)
+        if 2 <= len(line) <= 80 and not line.endswith(".") and len(line.split()) <= 10:
+            return line
+    return ""
 
 
 def draft_requisition(jd_text, context="", client=None):
@@ -282,7 +359,13 @@ _URL_RE = re.compile(r"https?://\S+|www\.\S+|linkedin\.com/\S+|github\.com/\S+",
 def mask_pii(text, name=None):
     masked = _EMAIL_RE.sub("[EMAIL]", text)
     masked = _URL_RE.sub("[LINK]", masked)
-    masked = _PHONE_RE.sub(lambda m: "[PHONE]" if sum(ch.isdigit() for ch in m.group(0)) >= 10 else m.group(0), masked)
+    def _mask_phone(m):
+        cand = m.group(0)
+        n = sum(ch.isdigit() for ch in cand)
+        if n < 10 or re.fullmatch(r"(?:\(?(?:19|20)\d{2}\)?[\s\-–—.()to]*){2,}", cand.strip(), flags=re.I):
+            return cand            # too short for a phone, or a run of years: keep dates for the model
+        return "[PHONE]"
+    masked = _PHONE_RE.sub(_mask_phone, masked)
     if name and name.strip() and name.strip().lower() not in ("not found", "unknown"):
         for part in sorted({p for p in re.split(r"\s+", name.strip()) if len(p) >= 3}, key=len, reverse=True):
             masked = re.sub(r"(?<![A-Za-z])" + re.escape(part) + r"(?![A-Za-z])", "[NAME]", masked, flags=re.I)
@@ -502,7 +585,10 @@ def _apply_years(criteria, verdicts, exp):
         order = ["not_met", "partial", "met"]
         v["verdict"] = order[min(order.index(model_verdict), order.index(capped))]
         v["computed_years"] = round(work_years, 1)
-        if v["verdict"] != model_verdict:
+        if v["reason"] == "Checked against job dates." or not v["reason"]:
+            v["reason"] = (f"Dates show about {work_years:.1f} years of full-time work"
+                           f"{' plus internships' if exp['internship'] else ''} against {need:g} asked.")
+        elif v["verdict"] != model_verdict:
             v["reason"] = (f"{v['reason']} Dates show about {work_years:.1f} years of work"
                            f"{' plus internships' if exp['internship'] else ''} against {need:g} asked.").strip()
 
@@ -525,7 +611,16 @@ def score_evaluation(criteria, verdicts):
             "must_total": len(musts), "must_met": musts_met}
 
 
+def _is_years_only(c):
+    """A requirement that is only an amount of experience ("3+ years"), judged from job dates."""
+    if not c.get("min_years"):
+        return False
+    from parsing import extract_skills
+    return not extract_skills(c["label"])
+
+
 def _finish(criteria, raw_items, resume_text, exp, engine):
+    years_only = {c["id"] for c in criteria if _is_years_only(c)}
     by_id = {}
     for it in raw_items:
         cid = str(it.get("id", ""))
@@ -535,7 +630,7 @@ def _finish(criteria, raw_items, resume_text, exp, engine):
         evidence = re.sub(r"\s+", " ", str(it.get("evidence", ""))).strip()[:300]
         verified = bool(evidence) and evidence_found(evidence, resume_text)
         reason = str(it.get("reason", "")).strip()[:300]
-        if verdict == "met" and not verified:
+        if verdict == "met" and not verified and cid not in years_only:
             verdict = "partial"
             reason = (reason + " (Quote could not be found in the resume, so marked partial.)").strip()
         by_id[cid] = {"verdict": verdict, "evidence": evidence if verified else "", "reason": reason,
@@ -576,7 +671,13 @@ def rule_evaluate(criteria, resume_text, today=None):
     items = []
     for c in criteria:
         label = c["label"]
-        alternatives = [a for a in re.split(r"\bor\b|/", label, flags=re.I) if a.strip()]
+        # split "X or Y" / "X/Y" into alternatives, but keep names like "A/B testing" or "CI/CD" whole
+        slash_names = sorted((a for a in ALIAS_TO_CANONICAL if "/" in a), key=len, reverse=True)
+        protected = label
+        for k, a in enumerate(slash_names):
+            protected = re.sub(re.escape(a), f"\x00{k}\x00", protected, flags=re.I)
+        parts = [a for a in re.split(r"\bor\b|/", protected, flags=re.I) if a.strip()]
+        alternatives = [re.sub(r"\x00(\d+)\x00", lambda m: slash_names[int(m.group(1))], a) for a in parts]
         best = ("not_met", None)
         for alt in alternatives:
             alt_low = alt.lower()
