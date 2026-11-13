@@ -213,10 +213,11 @@ def test_engine_run_is_logged_and_page_renders():
     cur = Cur()
     meta = dict(engine.new_meta("resume"), path="ai", model="claude-sonnet-5-5", cost_usd=0.02, seconds=4.2)
     app_module.log_engine_run(cur, 7, "a.pdf", meta)
-    sql, params = cur.rows[0]
+    sql, params = [r for r in cur.rows if "INSERT INTO engine_runs" in r[0]][0]
     assert "INSERT INTO engine_runs" in sql and params[1] == 7 and params[3] == "ai" and params[5] == "a.pdf"
+    n = len(cur.rows)
     app_module.log_engine_run(cur, 7, "a.pdf", None)          # nothing to log, no error
-    assert len(cur.rows) == 1
+    assert len(cur.rows) == n
 
     from flask import render_template
     stats = dict(runs=10, ai=9, rule=1, ai_share=90, p50=6.1, p95=14.8, cost_inr=21.5, cost_per_resume_inr=2.1,

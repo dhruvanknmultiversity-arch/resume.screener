@@ -437,6 +437,10 @@ def log_engine_run(cur, scan_id, filename, meta):
     if not meta:
         return
     try:
+        cur.execute("SAVEPOINT sg_log")
+    except Exception:
+        return
+    try:
         cur.execute(
             "INSERT INTO engine_runs (created_at, scan_id, kind, path, model, filename, input_tokens, "
             "output_tokens, cache_read_tokens, cache_write_tokens, seconds, cost_usd, attempts, error) "
@@ -446,8 +450,13 @@ def log_engine_run(cur, scan_id, filename, meta):
              meta.get("cache_read_tokens", 0), meta.get("cache_write_tokens", 0), meta.get("seconds", 0),
              meta.get("cost_usd", 0), meta.get("attempts", 0), (meta.get("error") or None)),
         )
-    except Exception as e:  # logging must never fail a scan
+        cur.execute("RELEASE SAVEPOINT sg_log")
+    except Exception as e:  # logging must never fail a scan: undo only the log row
         print(f"[screen-genie] engine_runs insert failed: {type(e).__name__}: {e}", file=sys.stderr)
+        try:
+            cur.execute("ROLLBACK TO SAVEPOINT sg_log")
+        except Exception:
+            pass
 
 
 def insert_candidate(cur, scan_id, c):
@@ -1049,12 +1058,12 @@ def engine_health():
                COALESCE(SUM(input_tokens + cache_read_tokens + cache_write_tokens), 0) AS all_in
         FROM engine_runs WHERE kind = 'resume' AND created_at >= %s
     """, (since7,))
-    r = cur.fetchone()
+    r = {k: (float(v) if v is not None and k not in ("runs","ai","rule") else v) for k, v in fetchone_dict(cur).items()}
     cur.execute("""
         SELECT COUNT(*) AS runs, COUNT(*) FILTER (WHERE path = 'ai') AS ai
         FROM engine_runs WHERE kind = 'requisition' AND created_at >= %s
     """, (since7,))
-    q = cur.fetchone()
+    q = fetchone_dict(cur)
     cur.execute("""
         SELECT SUBSTRING(created_at, 1, 10) AS day,
                COUNT(*) FILTER (WHERE kind = 'resume') AS resumes,
@@ -1064,13 +1073,13 @@ def engine_health():
         FROM engine_runs WHERE created_at >= %s
         GROUP BY 1 ORDER BY 1 DESC
     """, (since14,))
-    days = cur.fetchall()
+    days = [dict(d, cost=float(d["cost"] or 0)) for d in fetchall_dict(cur)]
     cur.execute("""
         SELECT created_at, kind, path, filename, scan_id, error
         FROM engine_runs WHERE error IS NOT NULL
         ORDER BY id DESC LIMIT 25
     """)
-    failures = cur.fetchall()
+    failures = fetchall_dict(cur)
     cur.close()
 
     usd_inr = float(os.environ.get("SG_USD_INR", "88"))
