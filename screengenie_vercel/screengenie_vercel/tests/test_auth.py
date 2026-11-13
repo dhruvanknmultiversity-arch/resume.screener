@@ -125,3 +125,15 @@ def test_keepalive_is_public_but_respects_cron_secret(monkeypatch):
     assert c.get("/cron/keepalive").status_code == 403
     assert c.get("/cron/keepalive", headers={"Authorization": "Bearer s3cret-value"}).status_code == 200
     assert c.get("/dashboard").status_code in (302, 303)        # everything else stays locked
+
+
+def test_agreement_rate_has_an_honest_range():
+    os.environ.update(SECRET_KEY="x" * 40, TEAM_PASSWORD="hunter2-team-pass")
+    for m in ("app", "auth"):
+        sys.modules.pop(m, None)
+    import app as app_module
+    assert app_module._rate(0, 0) is None
+    small = app_module._rate(2, 3)
+    assert small["pct"] == 67 and small["lo"] < 30 and small["hi"] > 90       # 3 answers prove little
+    big = app_module._rate(180, 200)
+    assert big["pct"] == 90 and 84 <= big["lo"] and big["hi"] <= 94

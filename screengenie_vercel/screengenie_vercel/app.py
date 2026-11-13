@@ -245,6 +245,27 @@ def init_db():
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS internship_months INTEGER")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS experience_detail TEXT")
     cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS unreadable TEXT")
+    cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS engine_path TEXT")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS feedback (
+            id SERIAL PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            scan_id INTEGER,
+            candidate_id INTEGER NOT NULL,
+            target TEXT NOT NULL,
+            criterion_id TEXT NOT NULL DEFAULT '',
+            label TEXT,
+            kind TEXT,
+            engine_path TEXT,
+            system_value TEXT,
+            hr_value TEXT,
+            agree BOOLEAN NOT NULL,
+            note TEXT,
+            UNIQUE (candidate_id, target, criterion_id)
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS feedback_scan_idx ON feedback (scan_id)")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS knockout_failed BOOLEAN DEFAULT FALSE")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS must_met INTEGER")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS must_total INTEGER")
@@ -516,8 +537,8 @@ def insert_candidate(cur, scan_id, c):
         "section_scores, matched_keywords, missing_keywords, matched_skills, missing_skills, "
         "extra_skills, reasons, file_data, suggestions, passed_checks, warning_checks, "
         "issue_checks, semantic_score, cand_years, criteria_results, experience_months, "
-        "internship_months, knockout_failed, must_met, must_total, current_title, experience_detail) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        "internship_months, knockout_failed, must_met, must_total, current_title, experience_detail, engine_path) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         (scan_id, c["filename"], c["name"], c["email"], c["phone"], c["score"], c["grade"],
          c["status"], json.dumps(c["section_scores"]), json.dumps(c["matched_keywords"]),
          json.dumps(c["missing_keywords"]), json.dumps(c["matched_skills"]),
@@ -529,7 +550,8 @@ def insert_candidate(cur, scan_id, c):
          json.dumps(c["criteria_results"]) if c.get("criteria_results") is not None else None,
          c.get("experience_months"), c.get("internship_months"), bool(c.get("knockout_failed")),
          c.get("must_met"), c.get("must_total"), c.get("current_title"),
-         json.dumps(c["experience_detail"]) if c.get("experience_detail") else None),
+         json.dumps(c["experience_detail"]) if c.get("experience_detail") else None,
+         (c.get("engine_meta") or {}).get("path")),
     )
     log_engine_run(cur, scan_id, c.get("filename"), c.get("engine_meta"))
 
@@ -1018,7 +1040,7 @@ def candidate_detail(candidate_id):
         "section_scores, matched_keywords, missing_keywords, matched_skills, missing_skills, "
         "extra_skills, reasons, suggestions, passed_checks, warning_checks, issue_checks, "
         "semantic_score, cand_years, criteria_results, experience_months, internship_months, "
-        "knockout_failed, must_met, must_total, current_title, experience_detail, "
+        "knockout_failed, must_met, must_total, current_title, experience_detail, engine_path, "
         "(file_data IS NOT NULL) AS has_file FROM candidates WHERE id = %s",
         (candidate_id,),
     )
@@ -1051,6 +1073,9 @@ def candidate_detail(candidate_id):
         (candidate["scan_id"],),
     )
     ordered_ids = [r[0] for r in cur.fetchall()]
+    cur.execute("SELECT target, criterion_id, agree, hr_value, note, updated_at FROM feedback "
+                "WHERE candidate_id = %s", (candidate_id,))
+    feedback = {f"{r['target']}:{r['criterion_id']}": r for r in fetchall_dict(cur)}
     cur.close()
 
     prev_id = next_id = None
@@ -1065,8 +1090,86 @@ def candidate_detail(candidate_id):
 
     return render_template(
         "candidate.html", candidate=candidate, scan=scan_row,
-        prev_id=prev_id, next_id=next_id, rank=rank, total=len(ordered_ids),
+        prev_id=prev_id, next_id=next_id, rank=rank, total=len(ordered_ids), feedback=feedback,
     )
+
+
+@app.route("/candidate/<int:candidate_id>/feedback", methods=["POST"])
+def candidate_feedback(candidate_id):
+    """HR says whether Screen Genie got something right: the overall result, one requirement,
+    or the experience total. What Screen Genie said is read from the database, never from the browser."""
+    origin = request.headers.get("Origin")
+    if origin and origin.rstrip("/") != request.host_url.rstrip("/"):
+        return jsonify({"error": "Cross-site request refused."}), 403
+    data = request.get_json(silent=True) or {}
+    target = data.get("target")
+    if target not in ("overall", "criterion", "experience"):
+        return jsonify({"error": "Unknown feedback target."}), 400
+    crit_id = str(data.get("criterion_id") or "")[:20] if target == "criterion" else ""
+    note = (str(data.get("note") or "").strip()[:500]) or None
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id, scan_id, status, criteria_results, experience_months, engine_path "
+                "FROM candidates WHERE id = %s", (candidate_id,))
+    c = fetchone_dict(cur)
+    if not c:
+        cur.close()
+        return jsonify({"error": "Candidate not found."}), 404
+
+    if data.get("clear"):
+        cur.execute("DELETE FROM feedback WHERE candidate_id = %s AND target = %s AND criterion_id = %s",
+                    (candidate_id, target, crit_id))
+        db.commit()
+        cur.close()
+        return jsonify({"ok": True, "cleared": True})
+
+    label = kind = None
+    if target == "overall":
+        system_value, allowed = c["status"], {"Shortlist", "Review", "Reject"}
+        label = "Overall result"
+    elif target == "experience":
+        system_value, allowed = str(c["experience_months"] if c["experience_months"] is not None else ""), None
+        label = "Full-time experience"
+    else:
+        results = json.loads(c["criteria_results"]) if c.get("criteria_results") else []
+        r = next((x for x in results if str(x.get("id")) == crit_id), None)
+        if not r:
+            cur.close()
+            return jsonify({"error": "Requirement not found."}), 404
+        system_value, allowed = r.get("verdict"), {"met", "partial", "not_met"}
+        label, kind = r.get("label"), r.get("kind")
+
+    agree = bool(data.get("agree"))
+    if agree:
+        hr_value = system_value
+    elif target == "experience":
+        try:
+            hr_value = str(max(0, min(600, int(data.get("hr_value")))))
+        except (TypeError, ValueError):
+            cur.close()
+            return jsonify({"error": "Enter the correct experience in years and months."}), 400
+        agree = hr_value == system_value
+    else:
+        hr_value = data.get("hr_value")
+        if hr_value not in allowed:
+            cur.close()
+            return jsonify({"error": "Choose what the right answer is."}), 400
+        agree = hr_value == system_value
+
+    now = datetime.utcnow().isoformat()
+    cur.execute(
+        "INSERT INTO feedback (created_at, updated_at, scan_id, candidate_id, target, criterion_id, label, kind, "
+        "engine_path, system_value, hr_value, agree, note) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+        "ON CONFLICT (candidate_id, target, criterion_id) DO UPDATE SET updated_at = EXCLUDED.updated_at, "
+        "hr_value = EXCLUDED.hr_value, agree = EXCLUDED.agree, note = EXCLUDED.note, "
+        "system_value = EXCLUDED.system_value, label = EXCLUDED.label, kind = EXCLUDED.kind",
+        (now, now, c["scan_id"], candidate_id, target, crit_id, label, kind, c.get("engine_path") or "unknown",
+         system_value, hr_value, agree, note),
+    )
+    db.commit()
+    cur.close()
+    return jsonify({"ok": True, "agree": agree, "hr_value": hr_value, "system_value": system_value})
 
 
 def _send_resume(candidate_id, as_attachment):
@@ -1213,6 +1316,88 @@ def engine_health():
     }
     return render_template("engine_health.html", active="engine", stats=stats, days=days,
                            failures=failures, config=config)
+
+
+def _rate(agree, n):
+    """Agreement % with a 95% range (Wilson), so a handful of answers isn't over-read."""
+    if not n:
+        return None
+    import math
+    p, z = agree / n, 1.96
+    centre = (p + z * z / (2 * n)) / (1 + z * z / n)
+    half = z * math.sqrt(p * (1 - p) / n + z * z / (4 * n * n)) / (1 + z * z / n)
+    return {"pct": round(100 * p), "lo": max(0, round(100 * (centre - half))), "hi": min(100, round(100 * (centre + half))),
+            "n": n, "agree": agree}
+
+
+@app.route("/accuracy")
+def accuracy():
+    """How often HR agrees with Screen Genie: overall result, each requirement, experience."""
+    from datetime import timedelta
+    import experience as X
+    period = request.args.get("days", "all")
+    db = get_db()
+    cur = db.cursor()
+    sql = ("SELECT f.target, f.criterion_id, f.label, f.kind, f.engine_path, f.system_value, f.hr_value, f.agree, "
+           "f.note, f.updated_at, f.candidate_id, c.name AS cand_name, s.jd_role "
+           "FROM feedback f LEFT JOIN candidates c ON c.id = f.candidate_id LEFT JOIN scans s ON s.id = f.scan_id")
+    params = ()
+    if period in ("7", "30", "90"):
+        sql += " WHERE f.updated_at >= %s"
+        params = ((datetime.utcnow() - timedelta(days=int(period))).isoformat(),)
+    cur.execute(sql + " ORDER BY f.updated_at DESC", params)
+    rows = fetchall_dict(cur)
+    cur.close()
+
+    overall = [r for r in rows if r["target"] == "overall"]
+    crit = [r for r in rows if r["target"] == "criterion"]
+    exp_rows = [r for r in rows if r["target"] == "experience"]
+    statuses = ["Shortlist", "Review", "Reject"]
+    matrix = {a: {b: 0 for b in statuses} for a in statuses}
+    for r in overall:
+        if r["system_value"] in matrix and r["hr_value"] in statuses:
+            matrix[r["system_value"]][r["hr_value"]] += 1
+
+    def rate(rs):
+        return _rate(sum(1 for r in rs if r["agree"]), len(rs))
+
+    by_kind = {k: rate([r for r in crit if r["kind"] == k]) for k in ("must", "nice", "knockout")}
+    by_engine = {k: rate([r for r in crit if (r["engine_path"] or "unknown") == k]) for k in ("ai", "rule")}
+    said_met = [r for r in crit if r["system_value"] == "met"]
+    said_not = [r for r in crit if r["system_value"] == "not_met"]
+    groups = {}
+    for r in crit:
+        g = groups.setdefault((r["label"] or "").strip().lower(), {"label": r["label"], "n": 0, "wrong": 0})
+        g["n"] += 1
+        g["wrong"] += 0 if r["agree"] else 1
+    hard = sorted([g for g in groups.values() if g["wrong"]], key=lambda g: (-g["wrong"], -g["n"]))[:10]
+
+    errs = []
+    for r in exp_rows:
+        try:
+            sysm, hrm = int(r["system_value"]), int(r["hr_value"])
+        except (TypeError, ValueError):
+            continue
+        errs.append(dict(r, sysm=sysm, hrm=hrm, diff=sysm - hrm))
+    exp_stats = None
+    if errs:
+        n = len(errs)
+        exp_stats = {
+            "n": n,
+            "within3": _rate(sum(1 for e in errs if abs(e["diff"]) <= 3), n),
+            "within6": _rate(sum(1 for e in errs if abs(e["diff"]) <= 6), n),
+            "mae": X.format_duration(round(sum(abs(e["diff"]) for e in errs) / n)),
+            "bias": round(sum(e["diff"] for e in errs) / n),
+        }
+    misses = sorted([e for e in errs if e["diff"]], key=lambda e: -abs(e["diff"]))[:10]
+    corrections = [r for r in rows if not r["agree"]][:15]
+    candidates_checked = len({r["candidate_id"] for r in rows})
+    return render_template(
+        "accuracy.html", active="accuracy", period=period, total=len(rows), candidates_checked=candidates_checked,
+        overall=rate(overall), matrix=matrix, statuses=statuses, crit=rate(crit), by_kind=by_kind,
+        by_engine=by_engine, met_precision=rate(said_met), not_met_precision=rate(said_not), hard=hard,
+        exp_stats=exp_stats, misses=misses, corrections=corrections,
+    )
 
 
 @app.route("/dashboard")

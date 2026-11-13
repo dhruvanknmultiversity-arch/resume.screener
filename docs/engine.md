@@ -58,3 +58,15 @@ The same rules apply whether Claude or the rule-based backup screens the resume.
 The candidate page shows the full breakdown under **How experience was calculated**: every dated line,
 its months, and whether it counted as work, internship or not at all, with the reason.
 `tests/test_experience.py` holds 40+ cases covering every format and trap above.
+
+## Measuring accuracy (HR feedback)
+
+Every candidate page asks HR **Is this result right?** with a Right / Wrong control on the overall result,
+on each requirement and on the experience total. Wrong asks for the right answer (a status, a verdict, or
+the correct years and months). Answers are stored in `feedback` with what Screen Genie said (read from the
+database, never from the browser) and whether Claude or the backup screened the resume.
+
+**Admin → Accuracy** turns the answers into agreement rates: overall result (with a Screen Genie vs HR
+grid), requirements by kind and by engine, how reliable a "Met" or "Not met" is, experience within 3 and
+6 months with the typical miss, the requirements most often wrong, and the latest corrections. Below 30
+answers a 95% range is shown so a few answers are not over-read.

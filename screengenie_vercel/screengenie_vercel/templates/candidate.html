@@ -7,6 +7,22 @@
 {% macro label(score) -%}
   {%- if score >= 75 -%}strong{%- elif score >= 50 -%}moderate{%- else -%}weak{%- endif -%}
 {%- endmacro %}
+{% set fb = feedback or {} %}
+{% macro fb_control(target, crit_id='', choices=None, system_value='') -%}
+{%- set f = fb.get(target ~ ':' ~ crit_id) -%}
+<div class="fb" data-target="{{ target }}" data-crit="{{ crit_id }}" data-system="{{ system_value }}"
+     data-state="{{ '' if not f else ('agree' if f['agree'] else 'disagree') }}">
+  <span class="fb-q">Right?</span>
+  <button type="button" class="fb-btn yes" aria-pressed="{{ 'true' if f and f['agree'] else 'false' }}" title="Screen Genie got this right" aria-label="Right">{{ icon('check', 'ico-svg sm') }}</button>
+  <button type="button" class="fb-btn no" aria-pressed="{{ 'true' if f and not f['agree'] else 'false' }}" title="Screen Genie got this wrong" aria-label="Wrong">{{ icon('x', 'ico-svg sm') }}</button>
+  {% if choices %}
+  <select class="fb-fix" aria-label="What is right" {{ '' if f and not f['agree'] else 'hidden' }}>
+    <option value="">Should be…</option>
+    {% for v, lbl in choices %}{% if v != system_value %}<option value="{{ v }}" {{ 'selected' if f and f['hr_value'] == v }}>{{ lbl }}</option>{% endif %}{% endfor %}
+  </select>
+  {% endif %}
+</div>
+{%- endmacro %}
 {% set parts = (candidate['name'] or '?').split() %}
 {% set band = 'high' if candidate['score']>=70 else ('mid' if candidate['score']>=45 else 'low') %}
 {% set status_line = {'Shortlist': 'Why this candidate is shortlisted', 'Review': 'Why this candidate needs a review', 'Reject': 'Why this candidate was not shortlisted'} %}
@@ -72,6 +88,24 @@
   {% endif %}
 </section>
 
+{# ── HR check ── #}
+{% set n_checks = 2 + (candidate['criteria_results']|length) %}
+{% set done_checks = fb|length %}
+{% set fo = fb.get('overall:') %}
+<section class="card hr-check" aria-labelledby="hr-check-title">
+  <div class="hr-check-main">
+    <div>
+      <h2 id="hr-check-title" class="card-title" style="margin:0 0 4px;">Is this result right?</h2>
+      <p class="muted" style="margin:0;">Screen Genie says <strong>{{ candidate['status'] }}</strong>. Your answers measure how accurate screening is; nothing about this candidate changes.</p>
+    </div>
+    {{ fb_control('overall', '', [('Shortlist', 'Shortlist'), ('Review', 'Review'), ('Reject', 'Reject')], candidate['status']) }}
+  </div>
+  <div class="hr-check-foot">
+    <span class="muted small" id="fb-progress" data-total="{{ n_checks }}">{{ done_checks }} of {{ n_checks }} checks answered on this candidate</span>
+    <span class="muted small">Tick <span class="fb-mini yes">{{ icon('check', 'ico-svg sm') }}</span> or <span class="fb-mini no">{{ icon('x', 'ico-svg sm') }}</span> on the result, each requirement and the experience total.</span>
+  </div>
+</section>
+
 {# ── Why ── #}
 <section class="card" style="margin-bottom:20px;" aria-labelledby="why-title">
   <h2 id="why-title" class="card-title">{{ status_line.get(candidate['status'], 'Why this result') }}</h2>
@@ -102,6 +136,7 @@
         {% if r['reason'] %}<div class="crit-reason">{{ r['reason'] }}</div>{% endif %}
         {% if r['evidence'] %}<div class="quote">“{{ r['evidence'] }}”</div>{% endif %}
       </div>
+      <div class="crit-fb">{{ fb_control('criterion', r['id'], [('met', 'Met'), ('partial', 'Partial'), ('not_met', 'Not met')], r['verdict']) }}</div>
     </div>
     {% endfor %}
   </div>
@@ -117,6 +152,18 @@
       <span class="hint" title="Months are counted from the dates in the resume, inclusive of start and end month. Overlapping roles count once. Internships are kept separate. Education, projects and certifications are not counted. A year with no month is read as mid-year.">{{ icon('info', 'ico-svg sm') }}</span>
     </h2>
     <span class="exp-total">{{ yrs(candidate['experience_months']) }} full-time{% if candidate['internship_months'] %} · {{ yrs(candidate['internship_months']) }} internships{% endif %}{% if xd['approximate'] %} · approx.{% endif %}</span>
+  </div>
+  {% set fe = fb.get('experience:') %}
+  {% set hm = (fe['hr_value']|int) if fe and not fe['agree'] and fe['hr_value'] else none %}
+  <div class="exp-fb">
+    <span class="muted small">Is {{ yrs(candidate['experience_months']) }} of full-time experience right?</span>
+    {{ fb_control('experience', '', none, candidate['experience_months'] if candidate['experience_months'] is not none else '') }}
+    <div class="exp-fix" {{ '' if fe and not fe['agree'] else 'hidden' }}>
+      <label class="muted small">Correct total</label>
+      <input type="number" min="0" max="50" class="exp-y" aria-label="Years" value="{{ (hm // 12) if hm is not none else '' }}"> <span class="muted small">yrs</span>
+      <input type="number" min="0" max="11" class="exp-m" aria-label="Months" value="{{ (hm % 12) if hm is not none else '' }}"> <span class="muted small">mos</span>
+      <button type="button" class="ghost-btn sm exp-save">Save</button>
+    </div>
   </div>
   {% if xd['note'] %}<div class="exp-note">{{ icon('alert', 'ico-svg sm') }}<span>{{ xd['note'] }}</span></div>{% endif %}
   {% if xd['roles'] %}
@@ -251,6 +298,64 @@ function toast(msg){
   t.textContent=msg; t.classList.remove('hidden');
   clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.classList.add('hidden'),1800);
 }
+// ── HR feedback ──
+const FB_URL = "{{ url_for('candidate_feedback', candidate_id=candidate['id']) }}";
+async function sendFeedback(box, payload){
+  const body = Object.assign({target: box.dataset.target, criterion_id: box.dataset.crit}, payload);
+  try {
+    const r = await fetch(FB_URL, {method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body)});
+    const d = await r.json().catch(() => ({}));
+    if (!r.ok) { toast(d.error || 'Could not save. Try again.'); return false; }
+    if (d.cleared) { box.dataset.state = ''; }
+    else { box.dataset.state = d.agree ? 'agree' : 'disagree'; }
+    paintFeedback(box); updateProgress();
+    toast(d.cleared ? 'Answer removed' : (d.agree ? 'Saved: right' : 'Saved: correction recorded'));
+    return true;
+  } catch (e) { toast('Network problem. Not saved.'); return false; }
+}
+function paintFeedback(box){
+  const st = box.dataset.state;
+  box.querySelector('.yes').setAttribute('aria-pressed', st === 'agree');
+  box.querySelector('.no').setAttribute('aria-pressed', st === 'disagree' || box.dataset.pending === '1');
+  const fix = box.querySelector('.fb-fix');
+  if (fix) fix.hidden = !(st === 'disagree' || box.dataset.pending === '1');
+  if (box.dataset.target === 'experience') {
+    document.querySelector('.exp-fix').hidden = !(st === 'disagree' || box.dataset.pending === '1');
+  }
+}
+function updateProgress(){
+  const p = document.getElementById('fb-progress'); if (!p) return;
+  const n = [...document.querySelectorAll('.fb')].filter(b => b.dataset.state).length;
+  p.textContent = `${n} of ${p.dataset.total} checks answered on this candidate`;
+}
+document.querySelectorAll('.fb').forEach(box => {
+  box.querySelector('.yes').addEventListener('click', () => {
+    box.dataset.pending = '';
+    if (box.dataset.state === 'agree') sendFeedback(box, {clear: true});
+    else sendFeedback(box, {agree: true});
+  });
+  box.querySelector('.no').addEventListener('click', () => {
+    if (box.dataset.state === 'disagree') { box.dataset.pending = ''; sendFeedback(box, {clear: true}); return; }
+    box.dataset.pending = '1'; paintFeedback(box);   // pick the right answer, then it saves
+    const fix = box.querySelector('.fb-fix') || document.querySelector('.exp-y');
+    if (fix) fix.focus();
+  });
+  const fix = box.querySelector('.fb-fix');
+  if (fix) fix.addEventListener('change', () => {
+    if (!fix.value) return;
+    box.dataset.pending = '';
+    sendFeedback(box, {agree: false, hr_value: fix.value});
+  });
+});
+const expSave = document.querySelector('.exp-save');
+if (expSave) expSave.addEventListener('click', () => {
+  const box = document.querySelector('.fb[data-target="experience"]');
+  const y = parseInt(document.querySelector('.exp-y').value || '0', 10), m = parseInt(document.querySelector('.exp-m').value || '0', 10);
+  if (isNaN(y) || isNaN(m) || y < 0 || m < 0 || m > 11) { toast('Enter years, and months from 0 to 11.'); return; }
+  box.dataset.pending = '';
+  sendFeedback(box, {agree: false, hr_value: y * 12 + m});
+});
+
 document.querySelectorAll('.copyable').forEach(el=>{
   el.addEventListener('click',()=>{
     const v=el.dataset.copy;
