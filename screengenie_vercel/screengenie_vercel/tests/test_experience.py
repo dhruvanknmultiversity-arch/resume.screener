@@ -102,7 +102,7 @@ def test_full_resume_breakdown():
 
 def test_stated_years_far_from_dates_is_flagged():
     e = X.from_text("Summary: 10+ years of experience in sales.\nEXPERIENCE\nSales Exec, X  Jan 2022 - Dec 2023", T)
-    assert "Resume states 10+ years; dated roles add up to 2.0 years." in X.summary_note(e)
+    assert "Resume states 10+ years; dated roles add up to 2 years." in X.summary_note(e)
 
 
 def test_model_roles_must_have_dates_in_the_resume():
@@ -128,3 +128,11 @@ def test_parse_month_compatibility():
     assert X.parse_month("present", T) == 2026 * 12 + 10
     assert X.parse_month("2024", T) == 2024 * 12 + 6 and X.parse_month("2024", T, is_end=True) == 2024 * 12 + 5
     assert X.parse_month("", T) is None and X.parse_month("soon", T) is None
+
+
+def test_durations_are_years_and_months():
+    f = X.format_duration
+    assert [f(0), f(1), f(11), f(12), f(13), f(27), f(113)] == \
+        ["0 mos", "1 mo", "11 mos", "1 yr", "1 yr 1 mo", "2 yrs 3 mos", "9 yrs 5 mos"]
+    assert f(113, long=True) == "9 years 5 months" and X.format_years(2.5) == "2 years 6 months"
+    assert f(None) == "—"

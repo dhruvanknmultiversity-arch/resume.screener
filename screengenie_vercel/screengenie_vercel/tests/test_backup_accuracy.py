@@ -24,7 +24,7 @@ def test_experience_from_dates_is_met_not_partial():
     crit = engine.rule_requisition(JD)["criteria"]
     ev = engine.rule_evaluate(crit, AISHA, today=TODAY)
     exp = [r for r in ev["results"] if r["min_years"]][0]
-    assert exp["verdict"] == "met" and "7.4 years" in exp["reason"]
+    assert exp["verdict"] == "met" and "7 years 5 months of full-time work against 3 years asked" in exp["reason"]
 
 
 def test_experience_check_without_quote_still_met_on_ai_path():

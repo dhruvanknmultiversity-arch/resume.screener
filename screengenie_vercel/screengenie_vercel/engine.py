@@ -532,11 +532,13 @@ def _apply_years(criteria, verdicts, exp):
         v["verdict"] = order[min(order.index(model_verdict), order.index(capped))]
         v["computed_years"] = round(work_years, 1)
         if v["reason"] == "Checked against job dates." or not v["reason"]:
-            v["reason"] = (f"Dates show about {work_years:.1f} years of full-time work"
-                           f"{' plus internships' if exp['internship'] else ''} against {need:g} asked.")
+            v["reason"] = (f"Dates show {experience.format_duration(exp['work'], long=True)} of full-time work"
+                           f"{' plus ' + experience.format_duration(exp['internship'], long=True) + ' of internships' if exp['internship'] else ''}"
+                           f" against {experience.format_years(need)} asked.")
         elif v["verdict"] != model_verdict:
-            v["reason"] = (f"{v['reason']} Dates show about {work_years:.1f} years of work"
-                           f"{' plus internships' if exp['internship'] else ''} against {need:g} asked.").strip()
+            v["reason"] = (f"{v['reason']} Dates show {experience.format_duration(exp['work'], long=True)} of full-time work"
+                           f"{' plus ' + experience.format_duration(exp['internship'], long=True) + ' of internships' if exp['internship'] else ''}"
+                           f" against {experience.format_years(need)} asked.").strip()
 
 
 def score_evaluation(criteria, verdicts):
@@ -699,7 +701,7 @@ def evaluate_resume(jd_text, criteria, resume_text, name=None, client=None, toda
     if not exp["work"] and not exp["internship"] and (scan["work"] or scan["internship"]):
         exp = scan                                  # Claude returned no usable roles: use the date scan
     elif abs(exp["work"] - scan["work"]) >= 12 and scan["roles"]:
-        exp["cross_check"] = (f"A second reading of the dates gives {scan['work'] / 12:.1f} years; "
+        exp["cross_check"] = (f"A second reading of the dates gives {experience.format_duration(scan['work'], long=True)}; "
                               f"check the dates in this resume.")
     out = _finish(criteria, data.get("criteria") or [], masked, exp, "ai")
     # evidence was checked against the masked text the model saw; show it as-is

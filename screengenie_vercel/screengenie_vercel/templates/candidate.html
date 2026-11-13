@@ -57,7 +57,7 @@
 {% set kw_pct = ((candidate['matched_keywords']|length / total_kw * 100)|round(0)|int) if total_kw > 0 else 0 %}
 {% set total_sk = candidate['matched_skills']|length + candidate['missing_skills']|length %}
 {% set v2 = candidate['criteria_results']|length > 0 %}
-{% macro yrs(months) -%}{% if months is none %}—{% elif months < 12 %}{{ months }} mo{% else %}{{ '%.1f'|format(months / 12) }} yrs{% endif %}{%- endmacro %}
+{% macro yrs(months) -%}{{ months|duration }}{%- endmacro %}
 <section class="grid-4" aria-label="Key numbers">
   {% if v2 %}
   <div class="stat-tile accent"><span class="l">Must-haves met</span><span class="v">{{ candidate['must_met'] }}<span class="muted" style="font-size:16px; font-weight:700;"> / {{ candidate['must_total'] }}</span></span></div>
@@ -97,7 +97,7 @@
       <div><span class="verdict {{ r['verdict'] }}">{{ {'met': 'Met', 'partial': 'Partial', 'not_met': 'Not met'}[r['verdict']] }}</span></div>
       <div>
         <div class="crit-title">{{ r['label'] }}
-          <span class="kind-tag {{ r['kind'] }}">{{ {'must': 'Must-have', 'nice': 'Nice-to-have', 'knockout': 'Knockout'}[r['kind']] }}{% if r['min_years'] %} · {{ '%g'|format(r['min_years']) }}+ yrs{% endif %}</span>
+          <span class="kind-tag {{ r['kind'] }}">{{ {'must': 'Must-have', 'nice': 'Nice-to-have', 'knockout': 'Knockout'}[r['kind']] }}{% if r['min_years'] %} · {{ (r['min_years'] * 12)|duration }}+{% endif %}</span>
         </div>
         {% if r['reason'] %}<div class="crit-reason">{{ r['reason'] }}</div>{% endif %}
         {% if r['evidence'] %}<div class="quote">“{{ r['evidence'] }}”</div>{% endif %}
@@ -122,14 +122,14 @@
   {% if xd['roles'] %}
   <div class="table-scroll">
     <table class="rank-table exp-table">
-      <thead><tr><th scope="col">Role</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="num">Months</th><th scope="col">Counted as</th></tr></thead>
+      <thead><tr><th scope="col">Role</th><th scope="col">From</th><th scope="col">To</th><th scope="col" class="num">Duration</th><th scope="col">Counted as</th></tr></thead>
       <tbody>
       {% for r in xd['roles'] %}
         <tr class="{{ 'is-excluded' if r['kind'] == 'excluded' }}">
           <td><div class="exp-role">{{ r['title'] or '—' }}</div><div class="muted small">{{ r['dates'] }}</div></td>
           <td>{{ r['from'] }}{% if not r['precise'] %}<span class="muted" title="Only the year is given"> *</span>{% endif %}</td>
           <td>{{ r['to'] }}</td>
-          <td class="num">{{ r['months'] if r['kind'] != 'excluded' else '—' }}</td>
+          <td class="num">{{ r['months']|duration if r['kind'] != 'excluded' else '—' }}</td>
           <td>
             {% if r['kind'] == 'work' %}<span class="exp-kind work">Full-time work</span>
             {% elif r['kind'] == 'internship' %}<span class="exp-kind intern">Internship</span>
@@ -141,7 +141,7 @@
       </tbody>
     </table>
   </div>
-  {% if xd['overlap'] %}<p class="muted small" style="margin-top:10px;">{{ xd['overlap'] }} months where roles overlap are counted once.</p>{% endif %}
+  {% if xd['overlap'] %}<p class="muted small" style="margin-top:10px;">{{ xd['overlap']|duration }} where roles overlap {{ 'is' if xd['overlap'] == 1 else 'are' }} counted once.</p>{% endif %}
   {% if xd['approximate'] %}<p class="muted small" style="margin-top:4px;">* Only the year is given, so it is read as mid-year.</p>{% endif %}
   {% else %}
   <p class="muted">No dated roles were found in this resume{% if xd['stated_years'] %}; it states {{ '%g'|format(xd['stated_years']) }}+ years of experience{% endif %}.</p>
