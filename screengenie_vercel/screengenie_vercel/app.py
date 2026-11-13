@@ -245,6 +245,27 @@ def init_db():
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS internship_months INTEGER")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS experience_detail TEXT")
     cur.execute("ALTER TABLE scans ADD COLUMN IF NOT EXISTS unreadable TEXT")
+    cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS engine_path TEXT")
+    cur.execute("""
+        CREATE TABLE IF NOT EXISTS feedback (
+            id SERIAL PRIMARY KEY,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            scan_id INTEGER,
+            candidate_id INTEGER NOT NULL,
+            target TEXT NOT NULL,
+            criterion_id TEXT NOT NULL DEFAULT '',
+            label TEXT,
+            kind TEXT,
+            engine_path TEXT,
+            system_value TEXT,
+            hr_value TEXT,
+            agree BOOLEAN NOT NULL,
+            note TEXT,
+            UNIQUE (candidate_id, target, criterion_id)
+        )
+    """)
+    cur.execute("CREATE INDEX IF NOT EXISTS feedback_scan_idx ON feedback (scan_id)")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS knockout_failed BOOLEAN DEFAULT FALSE")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS must_met INTEGER")
     cur.execute("ALTER TABLE candidates ADD COLUMN IF NOT EXISTS must_total INTEGER")
@@ -516,8 +537,8 @@ def insert_candidate(cur, scan_id, c):
         "section_scores, matched_keywords, missing_keywords, matched_skills, missing_skills, "
         "extra_skills, reasons, file_data, suggestions, passed_checks, warning_checks, "
         "issue_checks, semantic_score, cand_years, criteria_results, experience_months, "
-        "internship_months, knockout_failed, must_met, must_total, current_title, experience_detail) "
-        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
+        "internship_months, knockout_failed, must_met, must_total, current_title, experience_detail, engine_path) "
+        "VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)",
         (scan_id, c["filename"], c["name"], c["email"], c["phone"], c["score"], c["grade"],
          c["status"], json.dumps(c["section_scores"]), json.dumps(c["matched_keywords"]),
          json.dumps(c["missing_keywords"]), json.dumps(c["matched_skills"]),
@@ -529,7 +550,8 @@ def insert_candidate(cur, scan_id, c):
          json.dumps(c["criteria_results"]) if c.get("criteria_results") is not None else None,
          c.get("experience_months"), c.get("internship_months"), bool(c.get("knockout_failed")),
          c.get("must_met"), c.get("must_total"), c.get("current_title"),
-         json.dumps(c["experience_detail"]) if c.get("experience_detail") else None),
+         json.dumps(c["experience_detail"]) if c.get("experience_detail") else None,
+         (c.get("engine_meta") or {}).get("path")),
     )
     log_engine_run(cur, scan_id, c.get("filename"), c.get("engine_meta"))
 
@@ -1018,7 +1040,7 @@ def candidate_detail(candidate_id):
         "section_scores, matched_keywords, missing_keywords, matched_skills, missing_skills, "
         "extra_skills, reasons, suggestions, passed_checks, warning_checks, issue_checks, "
         "semantic_score, cand_years, criteria_results, experience_months, internship_months, "
-        "knockout_failed, must_met, must_total, current_title, experience_detail, "
+        "knockout_failed, must_met, must_total, current_title, experience_detail, engine_path, "
         "(file_data IS NOT NULL) AS has_file FROM candidates WHERE id = %s",
         (candidate_id,),
     )
@@ -1051,6 +1073,9 @@ def candidate_detail(candidate_id):
         (candidate["scan_id"],),
     )
     ordered_ids = [r[0] for r in cur.fetchall()]
+    cur.execute("SELECT target, criterion_id, agree, hr_value, note, updated_at FROM feedback "
+                "WHERE candidate_id = %s", (candidate_id,))
+    feedback = {f"{r['target']}:{r['criterion_id']}": r for r in fetchall_dict(cur)}
     cur.close()
 
     prev_id = next_id = None
@@ -1065,8 +1090,86 @@ def candidate_detail(candidate_id):
 
     return render_template(
         "candidate.html", candidate=candidate, scan=scan_row,
-        prev_id=prev_id, next_id=next_id, rank=rank, total=len(ordered_ids),
+        prev_id=prev_id, next_id=next_id, rank=rank, total=len(ordered_ids), feedback=feedback,
     )
+
+
+@app.route("/candidate/<int:candidate_id>/feedback", methods=["POST"])
+def candidate_feedback(candidate_id):
+    """HR says whether Screen Genie got something right: the overall result, one requirement,
+    or the experience total. What Screen Genie said is read from the database, never from the browser."""
+    origin = request.headers.get("Origin")
+    if origin and origin.rstrip("/") != request.host_url.rstrip("/"):
+        return jsonify({"error": "Cross-site request refused."}), 403
+    data = request.get_json(silent=True) or {}
+    target = data.get("target")
+    if target not in ("overall", "criterion", "experience"):
+        return jsonify({"error": "Unknown feedback target."}), 400
+    crit_id = str(data.get("criterion_id") or "")[:20] if target == "criterion" else ""
+    note = (str(data.get("note") or "").strip()[:500]) or None
+
+    db = get_db()
+    cur = db.cursor()
+    cur.execute("SELECT id, scan_id, status, criteria_results, experience_months, engine_path "
+                "FROM candidates WHERE id = %s", (candidate_id,))
+    c = fetchone_dict(cur)
+    if not c:
+        cur.close()
+        return jsonify({"error": "Candidate not found."}), 404
+
+    if data.get("clear"):
+        cur.execute("DELETE FROM feedback WHERE candidate_id = %s AND target = %s AND criterion_id = %s",
+                    (candidate_id, target, crit_id))
+        db.commit()
+        cur.close()
+        return jsonify({"ok": True, "cleared": True})
+
+    label = kind = None
+    if target == "overall":
+        system_value, allowed = c["status"], {"Shortlist", "Review", "Reject"}
+        label = "Overall result"
+    elif target == "experience":
+        system_value, allowed = str(c["experience_months"] if c["experience_months"] is not None else ""), None
+        label = "Full-time experience"
+    else:
+        results = json.loads(c["criteria_results"]) if c.get("criteria_results") else []
+        r = next((x for x in results if str(x.get("id")) == crit_id), None)
+        if not r:
+            cur.close()
+            return jsonify({"error": "Requirement not found."}), 404
+        system_value, allowed = r.get("verdict"), {"met", "partial", "not_met"}
+        label, kind = r.get("label"), r.get("kind")
+
+    agree = bool(data.get("agree"))
+    if agree:
+        hr_value = system_value
+    elif target == "experience":
+        try:
+            hr_value = str(max(0, min(600, int(data.get("hr_value")))))
+        except (TypeError, ValueError):
+            cur.close()
+            return jsonify({"error": "Enter the correct experience in years and months."}), 400
+        agree = hr_value == system_value
+    else:
+        hr_value = data.get("hr_value")
+        if hr_value not in allowed:
+            cur.close()
+            return jsonify({"error": "Choose what the right answer is."}), 400
+        agree = hr_value == system_value
+
+    now = datetime.utcnow().isoformat()
+    cur.execute(
+        "INSERT INTO feedback (created_at, updated_at, scan_id, candidate_id, target, criterion_id, label, kind, "
+        "engine_path, system_value, hr_value, agree, note) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s) "
+        "ON CONFLICT (candidate_id, target, criterion_id) DO UPDATE SET updated_at = EXCLUDED.updated_at, "
+        "hr_value = EXCLUDED.hr_value, agree = EXCLUDED.agree, note = EXCLUDED.note, "
+        "system_value = EXCLUDED.system_value, label = EXCLUDED.label, kind = EXCLUDED.kind",
+        (now, now, c["scan_id"], candidate_id, target, crit_id, label, kind, c.get("engine_path") or "unknown",
+         system_value, hr_value, agree, note),
+    )
+    db.commit()
+    cur.close()
+    return jsonify({"ok": True, "agree": agree, "hr_value": hr_value, "system_value": system_value})
 
 
 def _send_resume(candidate_id, as_attachment):
